@@ -1,0 +1,18 @@
+# Credenciais — NUNCA subir para o GitHub
+.env
+
+# Ambiente virtual Python
+.venv/
+
+# Dependências Node
+node_modules/
+
+# Relatórios gerados (arquivos de saída)
+Relatorio_Diario_*.docx
+relatorio_data.json
+
+# macOS
+.DS_Store
+
+# Logs
+*.log
