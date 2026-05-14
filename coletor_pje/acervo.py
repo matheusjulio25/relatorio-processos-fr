@@ -1,7 +1,26 @@
 """Listagem do acervo de processos no PJe TRF5.
 
-Os seletores aqui são uma primeira aproximação e provavelmente precisarão de
-ajuste após a primeira execução headed contra o ambiente real.
+Estado: lista 876 CNJs com pje_id + pje_ca via paginacao das Caixas de entrada.
+
+PROXIMO PASSO (detalhe do processo):
+A URL listProcessoCompletoAdvogado.seam?id=X&ca=Y NAO funciona via navegacao
+direta - cai em /pje/error.seam. O link original na listagem e:
+  onclick="window.open(URL, 'blank_'); A4J.AJAX.Submit(...)"
+O A4J.AJAX.Submit que vem APOS o window.open e o que prepara a sessao no
+servidor para a popup. Sem ele, o detalhe falha.
+
+Solucao: ao invs de navegar pra URL salva no manifest, capturar a popup
+disparada pelo proprio onclick original durante a varredura do acervo:
+
+    async with page.context.expect_page() as popup_info:
+        await page.evaluate("(id) => document.getElementById(id).click()", linha_id)
+    popup = await popup_info.value
+    await popup.wait_for_load_state("domcontentloaded")
+    # ... extrair ultima movimentacao + 3 PDFs (decisao/intimacao/peticao,
+    # ignorando certidoes) do HTML da popup.
+
+Ou ainda: substituir o cli.cmd_detalhe pra abrir o painel, expandir caixa
+do CNJ alvo, e clicar no link dele com expect_page().
 """
 from __future__ import annotations
 
