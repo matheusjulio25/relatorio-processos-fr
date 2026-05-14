@@ -56,6 +56,16 @@ async def listar_acervo(ctx: BrowserContext, debug: bool = False) -> AsyncIterat
         await aba.click()
         await page.wait_for_timeout(10_000)
 
+    handles = page.locator("#formAbaAcervo\\:trAc .rich-tree-node-handle")
+    total_cidades = await handles.count()
+    print(f"[acervo] {total_cidades} cidades encontradas, expandindo...")
+    for i in range(total_cidades):
+        try:
+            await handles.nth(i).click()
+            await page.wait_for_timeout(3_000)
+        except Exception as e:
+            print(f"[acervo] erro expandindo cidade {i}: {e}")
+
     if debug:
         DEBUG_DIR.mkdir(parents=True, exist_ok=True)
         await page.screenshot(path=str(DEBUG_DIR / "acervo.png"), full_page=True)
@@ -64,27 +74,12 @@ async def listar_acervo(ctx: BrowserContext, debug: bool = False) -> AsyncIterat
         print(f"[debug] URL final: {page.url}")
         print(f"[debug] artefatos em {DEBUG_DIR.resolve()}")
 
-    while True:
-        linhas = page.locator("table tbody tr")
-        total = await linhas.count()
-        for i in range(total):
-            row = linhas.nth(i)
-            texto = (await row.inner_text()).strip()
-            m = NUMERO_RE.search(texto)
-            if not m:
-                continue
-            cols = [c.strip() for c in texto.split("\t") if c.strip()]
-            yield ProcessoAcervo(
-                numero=m.group(0),
-                classe=cols[1] if len(cols) > 1 else None,
-                ultima_movimentacao=_parse_data(cols[-1] if cols else None),
-                titulo=cols[2] if len(cols) > 2 else None,
-            )
-
-        proximo = page.get_by_role("link", name=re.compile(r"Pr.xima|>>"))
-        if await proximo.count() == 0 or not await proximo.first.is_enabled():
-            break
-        await proximo.first.click()
-        await page.wait_for_load_state("networkidle")
+    html = await page.content()
+    vistos: set[str] = set()
+    for numero in NUMERO_RE.findall(html):
+        if numero == "9999999-99.9999.9.99.9999" or numero in vistos:
+            continue
+        vistos.add(numero)
+        yield ProcessoAcervo(numero=numero, classe=None, ultima_movimentacao=None, titulo=None)
 
     await page.close()
