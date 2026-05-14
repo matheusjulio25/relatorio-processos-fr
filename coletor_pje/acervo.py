@@ -78,11 +78,15 @@ async def listar_acervo(ctx: BrowserContext, debug: bool = False) -> AsyncIterat
     print(f"[acervo] {qtd_cidades} cidades, disparando expand AJAX...")
     try:
         await page.wait_for_function(
-            "() => document.querySelectorAll('a[id$=\":-1::cxItem\"]').length > 0",
-            timeout=60_000,
+            f"() => document.querySelectorAll('a[id$=\":-1::cxItem\"]').length >= {qtd_cidades}",
+            timeout=120_000,
         )
     except Exception:
-        print("[acervo] timeout esperando cxItem aparecer")
+        encontradas = await page.evaluate(
+            "() => document.querySelectorAll('a[id$=\":-1::cxItem\"]').length"
+        )
+        print(f"[acervo] timeout: so {encontradas}/{qtd_cidades} cidades expandiram")
+    await page.wait_for_timeout(3_000)
 
     html_inicial = await page.content()
     caixa_ids = re.findall(r'id="(formAbaAcervo:trAc:\d+:-1::cxItem)"', html_inicial)
