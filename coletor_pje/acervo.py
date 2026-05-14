@@ -50,6 +50,11 @@ async def listar_acervo(ctx: BrowserContext, debug: bool = False) -> AsyncIterat
     page = await ctx.new_page()
     await page.goto(f"{PJE_BASE_URL}{ACERVO_PATH}", wait_until="networkidle")
 
+    aba = page.locator("#tabAcervo_lbl")
+    if await aba.count() > 0:
+        await aba.click()
+        await page.wait_for_load_state("networkidle")
+
     if debug:
         DEBUG_DIR.mkdir(parents=True, exist_ok=True)
         await page.screenshot(path=str(DEBUG_DIR / "acervo.png"), full_page=True)
