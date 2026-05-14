@@ -56,30 +56,52 @@ async def listar_acervo(ctx: BrowserContext, debug: bool = False) -> AsyncIterat
         await aba.click()
         await page.wait_for_timeout(10_000)
 
-    handles = page.locator("#formAbaAcervo\\:trAc .rich-tree-node-handle")
+    handles = page.locator("#formAbaAcervo\\:trAc > #formAbaAcervo\\:trAc\\:childs > table .rich-tree-node-handle")
     total_cidades = await handles.count()
     print(f"[acervo] {total_cidades} cidades encontradas, expandindo...")
     for i in range(total_cidades):
         try:
             await handles.nth(i).click()
-            await page.wait_for_timeout(3_000)
+            await page.wait_for_timeout(2_000)
         except Exception as e:
             print(f"[acervo] erro expandindo cidade {i}: {e}")
+
+    caixas = page.locator('a[id$=":-1::cxItem"]')
+    total_caixas = await caixas.count()
+    print(f"[acervo] {total_caixas} caixas de entrada encontradas")
+
+    vistos: set[str] = set()
+    debug_caixas = []
+    for i in range(total_caixas):
+        caixa = caixas.nth(i)
+        cidade_id = (await caixa.get_attribute("id")) or f"caixa_{i}"
+        try:
+            await caixa.click()
+            await page.wait_for_timeout(5_000)
+        except Exception as e:
+            print(f"[acervo] erro clicando caixa {cidade_id}: {e}")
+            continue
+
+        html = await page.content()
+        if debug:
+            debug_caixas.append((cidade_id, html))
+
+        antes = len(vistos)
+        for numero in NUMERO_RE.findall(html):
+            if numero == "9999999-99.9999.9.99.9999" or numero in vistos:
+                continue
+            vistos.add(numero)
+            yield ProcessoAcervo(numero=numero, classe=None, ultima_movimentacao=None, titulo=None)
+        print(f"[acervo] caixa {i+1}/{total_caixas} ({cidade_id}): +{len(vistos)-antes} processos")
 
     if debug:
         DEBUG_DIR.mkdir(parents=True, exist_ok=True)
         await page.screenshot(path=str(DEBUG_DIR / "acervo.png"), full_page=True)
         (DEBUG_DIR / "acervo.html").write_text(await page.content(), encoding="utf-8")
         (DEBUG_DIR / "acervo.url").write_text(page.url, encoding="utf-8")
-        print(f"[debug] URL final: {page.url}")
+        for cid, html in debug_caixas:
+            safe = cid.replace(":", "_")
+            (DEBUG_DIR / f"caixa_{safe}.html").write_text(html, encoding="utf-8")
         print(f"[debug] artefatos em {DEBUG_DIR.resolve()}")
-
-    html = await page.content()
-    vistos: set[str] = set()
-    for numero in NUMERO_RE.findall(html):
-        if numero == "9999999-99.9999.9.99.9999" or numero in vistos:
-            continue
-        vistos.add(numero)
-        yield ProcessoAcervo(numero=numero, classe=None, ultima_movimentacao=None, titulo=None)
 
     await page.close()
