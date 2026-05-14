@@ -11,3 +11,4 @@ venv/
 playwright-state.json
 downloads/
 chroma_db/
+browser-profile/
