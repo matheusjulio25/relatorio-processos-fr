@@ -29,13 +29,30 @@ def _cert_config() -> dict:
 async def pje_context(headless: bool = True):
     """Abre um contexto Playwright autenticado e já logado no PJe."""
     async with async_playwright() as pw:
-        browser: Browser = await pw.chromium.launch(headless=headless)
+        browser: Browser = await pw.chromium.launch(
+            headless=headless,
+            args=[
+                "--disable-blink-features=AutomationControlled",
+                "--disable-features=IsolateOrigins,site-per-process",
+            ],
+        )
         ctx: BrowserContext = await browser.new_context(
             client_certificates=[_cert_config()],
             accept_downloads=True,
+            user_agent=(
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/131.0.0.0 Safari/537.36"
+            ),
+            locale="pt-BR",
+            timezone_id="America/Recife",
+            viewport={"width": 1366, "height": 800},
+        )
+        await ctx.add_init_script(
+            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
         )
         page = await ctx.new_page()
-        await page.goto(PJE_LOGIN_URL, wait_until="domcontentloaded")
+        await page.goto(PJE_LOGIN_URL, wait_until="domcontentloaded", timeout=60_000)
 
         # Botão "Certificado digital" — seletor pode variar; ajuste após rodar headed.
         cert_button = page.get_by_role("button", name="Certificado digital")
