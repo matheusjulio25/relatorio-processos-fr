@@ -54,7 +54,14 @@ async def listar_acervo(ctx: BrowserContext, debug: bool = False) -> AsyncIterat
     aba = page.locator("#tabAcervo_lbl")
     if await aba.count() > 0:
         await aba.click()
-        await page.wait_for_timeout(10_000)
+        try:
+            await page.wait_for_function(
+                "() => document.querySelectorAll('a[id$=\":-1::cxItem\"]').length > 0",
+                timeout=60_000,
+            )
+        except Exception:
+            print("[acervo] timeout esperando arvore de caixas; seguindo mesmo assim")
+        await page.wait_for_timeout(2_000)
 
     html_inicial = await page.content()
     caixa_ids = re.findall(r'id="(formAbaAcervo:trAc:\d+:-1::cxItem)"', html_inicial)
