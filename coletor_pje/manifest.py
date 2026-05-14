@@ -16,6 +16,8 @@ class Manifest:
     classe: str | None = None
     titulo: str | None = None
     ultima_movimentacao: str | None = None
+    pje_id: str | None = None
+    pje_ca: str | None = None
     pecas: dict[str, str] = field(default_factory=dict)  # id -> sha256
     ultima_coleta: str | None = None
     ultima_analise: str | None = None

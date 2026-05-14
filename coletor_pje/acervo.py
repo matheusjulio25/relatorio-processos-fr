@@ -20,14 +20,23 @@ DEBUG_DIR = Path(os.getenv("DEBUG_DIR", "debug"))
 
 ACERVO_PATH = "/pje/Painel/painel_usuario/advogado.seam"
 NUMERO_RE = re.compile(r"\d{7}-\d{2}\.\d{4}\.\d\.\d{2}\.\d{4}")
+# Cada linha da listagem tem o onclick window.open('...?id=X&amp;ca=Y',...);
+# pareamos com o CNJ que aparece logo em seguida no mesmo bloco da linha.
+LINHA_RE = re.compile(
+    r"listProcessoCompletoAdvogado\.seam\?id=(\d+)&(?:amp;)?ca=([0-9a-f]+)"
+    r".{0,4000}?(\d{7}-\d{2}\.\d{4}\.\d\.\d{2}\.\d{4})",
+    re.S,
+)
 
 
 @dataclass
 class ProcessoAcervo:
     numero: str
-    classe: str | None
-    ultima_movimentacao: str | None  # ISO date string quando possível
-    titulo: str | None
+    classe: str | None = None
+    ultima_movimentacao: str | None = None
+    titulo: str | None = None
+    pje_id: str | None = None
+    pje_ca: str | None = None
 
     def key(self) -> str:
         return self.numero
@@ -107,21 +116,53 @@ async def listar_acervo(ctx: BrowserContext, debug: bool = False) -> AsyncIterat
             print(f"[acervo] erro clicando caixa {cidade_id}: {e}")
             continue
 
-        try:
-            html = await page.content()
-        except Exception as e:
-            print(f"[acervo] page.content falhou: {e}")
-            break
-        if debug:
-            debug_caixas.append((cidade_id, html))
+        antes_caixa = len(vistos)
+        pagina = 1
+        while True:
+            try:
+                html = await page.content()
+            except Exception as e:
+                print(f"[acervo] page.content falhou: {e}")
+                break
+            if debug:
+                debug_caixas.append((f"{cidade_id}_p{pagina}", html))
 
-        antes = len(vistos)
-        for numero in NUMERO_RE.findall(html):
-            if numero == "9999999-99.9999.9.99.9999" or numero in vistos:
-                continue
-            vistos.add(numero)
-            yield ProcessoAcervo(numero=numero, classe=None, ultima_movimentacao=None, titulo=None)
-        print(f"[acervo] caixa {i+1}/{len(caixa_ids)} ({cidade_id}): +{len(vistos)-antes} processos")
+            antes_pag = len(vistos)
+            for pje_id, pje_ca, numero in LINHA_RE.findall(html):
+                if numero in vistos:
+                    continue
+                vistos.add(numero)
+                yield ProcessoAcervo(
+                    numero=numero, pje_id=pje_id, pje_ca=pje_ca
+                )
+            novos = len(vistos) - antes_pag
+
+            if novos == 0:
+                break
+            print(f"[acervo]    pagina {pagina}: +{novos}")
+
+            tem_proxima = await page.evaluate(
+                """() => {
+                    const sels = document.querySelectorAll(
+                        'td.rich-datascr-button, td.rich-datascr-act, td.rich-datascr-inact'
+                    );
+                    for (const td of sels) {
+                        const oc = td.getAttribute('onclick') || '';
+                        if (oc.includes("'page': 'next'") || oc.includes('"page":"next"')) {
+                            if (td.className.includes('inact')) return false;
+                            td.click();
+                            return true;
+                        }
+                    }
+                    return false;
+                }"""
+            )
+            if not tem_proxima:
+                break
+            pagina += 1
+            await page.wait_for_timeout(4_000)
+
+        print(f"[acervo] caixa {i+1}/{len(caixa_ids)} ({cidade_id}): +{len(vistos)-antes_caixa} processos em {pagina} pagina(s)")
 
     if debug:
         DEBUG_DIR.mkdir(parents=True, exist_ok=True)
