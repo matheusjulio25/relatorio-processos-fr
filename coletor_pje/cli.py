@@ -16,9 +16,9 @@ from .login import pje_context
 from .manifest import Manifest, diff_acervo
 
 
-async def _coletar(headless: bool):
+async def _coletar(headless: bool, debug: bool = False):
     async with pje_context(headless=headless) as ctx:
-        return [p async for p in listar_acervo(ctx)]
+        return [p async for p in listar_acervo(ctx, debug=debug)]
 
 
 def _now_iso() -> str:
@@ -26,14 +26,14 @@ def _now_iso() -> str:
 
 
 async def cmd_listar(args):
-    processos = await _coletar(headless=args.headless)
+    processos = await _coletar(headless=args.headless, debug=args.debug)
     for p in processos:
         print(f"{p.numero}\t{p.ultima_movimentacao or '-'}\t{p.titulo or ''}")
     print(f"\nTotal: {len(processos)}")
 
 
 async def cmd_diff(args):
-    processos = await _coletar(headless=args.headless)
+    processos = await _coletar(headless=args.headless, debug=args.debug)
     pendentes = diff_acervo(processos)
     print(f"Acervo total: {len(processos)} | Pendentes: {len(pendentes)}")
     for p in pendentes:
@@ -53,6 +53,7 @@ async def cmd_diff(args):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--headless", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--debug", action="store_true", help="salva screenshot + HTML do painel em debug/")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("listar")

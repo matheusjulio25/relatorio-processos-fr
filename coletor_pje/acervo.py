@@ -5,14 +5,18 @@ ajuste após a primeira execução headed contra o ambiente real.
 """
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import AsyncIterator
 
 from playwright.async_api import BrowserContext
 
 from .login import PJE_BASE_URL
+
+DEBUG_DIR = Path(os.getenv("DEBUG_DIR", "debug"))
 
 ACERVO_PATH = "/pje/Painel/painel_usuario/advogado.seam"
 NUMERO_RE = re.compile(r"\d{7}-\d{2}\.\d{4}\.\d\.\d{2}\.\d{4}")
@@ -41,10 +45,18 @@ def _parse_data(raw: str | None) -> str | None:
     return raw
 
 
-async def listar_acervo(ctx: BrowserContext) -> AsyncIterator[ProcessoAcervo]:
+async def listar_acervo(ctx: BrowserContext, debug: bool = False) -> AsyncIterator[ProcessoAcervo]:
     """Itera o acervo. Implementação inicial — refinar seletores no ambiente real."""
     page = await ctx.new_page()
     await page.goto(f"{PJE_BASE_URL}{ACERVO_PATH}", wait_until="networkidle")
+
+    if debug:
+        DEBUG_DIR.mkdir(parents=True, exist_ok=True)
+        await page.screenshot(path=str(DEBUG_DIR / "acervo.png"), full_page=True)
+        (DEBUG_DIR / "acervo.html").write_text(await page.content(), encoding="utf-8")
+        (DEBUG_DIR / "acervo.url").write_text(page.url, encoding="utf-8")
+        print(f"[debug] URL final: {page.url}")
+        print(f"[debug] artefatos em {DEBUG_DIR.resolve()}")
 
     while True:
         linhas = page.locator("table tbody tr")
