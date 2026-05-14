@@ -54,10 +54,7 @@ async def listar_acervo(ctx: BrowserContext, debug: bool = False) -> AsyncIterat
     aba = page.locator("#tabAcervo_lbl")
     if await aba.count() > 0:
         await aba.click()
-        try:
-            await page.wait_for_selector(".resultadoProcesso", timeout=30_000)
-        except Exception:
-            pass
+        await page.wait_for_timeout(10_000)
 
     if debug:
         DEBUG_DIR.mkdir(parents=True, exist_ok=True)
