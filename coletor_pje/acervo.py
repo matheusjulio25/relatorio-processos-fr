@@ -56,27 +56,15 @@ async def listar_acervo(ctx: BrowserContext, debug: bool = False) -> AsyncIterat
         await aba.click()
         await page.wait_for_timeout(10_000)
 
-    handles = page.locator("#formAbaAcervo\\:trAc > #formAbaAcervo\\:trAc\\:childs > table .rich-tree-node-handle")
-    total_cidades = await handles.count()
-    print(f"[acervo] {total_cidades} cidades encontradas, expandindo...")
-    for i in range(total_cidades):
-        try:
-            await handles.nth(i).click()
-            await page.wait_for_timeout(2_000)
-        except Exception as e:
-            print(f"[acervo] erro expandindo cidade {i}: {e}")
-
-    caixas = page.locator('a[id$=":-1::cxItem"]')
-    total_caixas = await caixas.count()
-    print(f"[acervo] {total_caixas} caixas de entrada encontradas")
+    html_inicial = await page.content()
+    caixa_ids = re.findall(r'id="(formAbaAcervo:trAc:\d+:-1::cxItem)"', html_inicial)
+    print(f"[acervo] {len(caixa_ids)} caixas de entrada encontradas")
 
     vistos: set[str] = set()
     debug_caixas = []
-    for i in range(total_caixas):
-        caixa = caixas.nth(i)
-        cidade_id = (await caixa.get_attribute("id")) or f"caixa_{i}"
+    for i, cidade_id in enumerate(caixa_ids):
         try:
-            await caixa.click()
+            await page.evaluate("(id) => document.getElementById(id).onclick()", cidade_id)
             await page.wait_for_timeout(5_000)
         except Exception as e:
             print(f"[acervo] erro clicando caixa {cidade_id}: {e}")
@@ -92,7 +80,7 @@ async def listar_acervo(ctx: BrowserContext, debug: bool = False) -> AsyncIterat
                 continue
             vistos.add(numero)
             yield ProcessoAcervo(numero=numero, classe=None, ultima_movimentacao=None, titulo=None)
-        print(f"[acervo] caixa {i+1}/{total_caixas} ({cidade_id}): +{len(vistos)-antes} processos")
+        print(f"[acervo] caixa {i+1}/{len(caixa_ids)} ({cidade_id}): +{len(vistos)-antes} processos")
 
     if debug:
         DEBUG_DIR.mkdir(parents=True, exist_ok=True)
