@@ -1,0 +1,15 @@
+.env
+*.pfx
+*.p12
+*.pem
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+.DS_Store
+playwright-state.json
+downloads/
+chroma_db/
+browser-profile/
+debug/
