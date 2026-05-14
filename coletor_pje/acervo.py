@@ -56,12 +56,33 @@ async def listar_acervo(ctx: BrowserContext, debug: bool = False) -> AsyncIterat
         await aba.click()
         try:
             await page.wait_for_function(
-                "() => document.querySelectorAll('a[id$=\":-1::cxItem\"]').length > 0",
+                "() => document.querySelectorAll('#formAbaAcervo\\\\:trAc td.rich-tree-node-icon[rich\\\\:onexpand]').length > 0",
                 timeout=60_000,
             )
         except Exception:
-            print("[acervo] timeout esperando arvore de caixas; seguindo mesmo assim")
+            print("[acervo] timeout esperando arvore de cidades; seguindo mesmo assim")
         await page.wait_for_timeout(2_000)
+
+    qtd_cidades = await page.evaluate("""
+        () => {
+            const tds = document.querySelectorAll('#formAbaAcervo\\\\:trAc td.rich-tree-node-icon');
+            let n = 0;
+            for (const td of tds) {
+                const code = td.getAttribute('rich:onexpand');
+                if (!code) continue;
+                try { new Function('event', code)(null); n++; } catch (e) {}
+            }
+            return n;
+        }
+    """)
+    print(f"[acervo] {qtd_cidades} cidades, disparando expand AJAX...")
+    try:
+        await page.wait_for_function(
+            "() => document.querySelectorAll('a[id$=\":-1::cxItem\"]').length > 0",
+            timeout=60_000,
+        )
+    except Exception:
+        print("[acervo] timeout esperando cxItem aparecer")
 
     html_inicial = await page.content()
     caixa_ids = re.findall(r'id="(formAbaAcervo:trAc:\d+:-1::cxItem)"', html_inicial)
