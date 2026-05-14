@@ -63,14 +63,23 @@ async def listar_acervo(ctx: BrowserContext, debug: bool = False) -> AsyncIterat
     vistos: set[str] = set()
     debug_caixas = []
     for i, cidade_id in enumerate(caixa_ids):
+        print(f"[acervo] -> caixa {i+1}/{len(caixa_ids)} {cidade_id}")
         try:
-            await page.evaluate("(id) => document.getElementById(id).onclick()", cidade_id)
+            ok = await page.evaluate(
+                "(id) => { const e = document.getElementById(id); if (!e) return 'no-elem'; try { e.onclick(); return 'ok'; } catch (err) { return 'err:' + err.message; } }",
+                cidade_id,
+            )
+            print(f"[acervo]    evaluate -> {ok}")
             await page.wait_for_timeout(5_000)
         except Exception as e:
             print(f"[acervo] erro clicando caixa {cidade_id}: {e}")
             continue
 
-        html = await page.content()
+        try:
+            html = await page.content()
+        except Exception as e:
+            print(f"[acervo] page.content falhou: {e}")
+            break
         if debug:
             debug_caixas.append((cidade_id, html))
 
