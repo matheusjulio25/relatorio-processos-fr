@@ -48,12 +48,16 @@ def _parse_data(raw: str | None) -> str | None:
 async def listar_acervo(ctx: BrowserContext, debug: bool = False) -> AsyncIterator[ProcessoAcervo]:
     """Itera o acervo. Implementação inicial — refinar seletores no ambiente real."""
     page = await ctx.new_page()
-    await page.goto(f"{PJE_BASE_URL}{ACERVO_PATH}", wait_until="networkidle")
+    await page.goto(f"{PJE_BASE_URL}{ACERVO_PATH}", wait_until="domcontentloaded", timeout=60_000)
+    await page.wait_for_selector("#tabAcervo_lbl", timeout=30_000)
 
     aba = page.locator("#tabAcervo_lbl")
     if await aba.count() > 0:
         await aba.click()
-        await page.wait_for_load_state("networkidle")
+        try:
+            await page.wait_for_selector(".resultadoProcesso", timeout=30_000)
+        except Exception:
+            pass
 
     if debug:
         DEBUG_DIR.mkdir(parents=True, exist_ok=True)
