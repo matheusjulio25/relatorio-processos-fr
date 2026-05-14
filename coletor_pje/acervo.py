@@ -143,14 +143,13 @@ async def listar_acervo(ctx: BrowserContext, debug: bool = False) -> AsyncIterat
 
             tem_proxima = await page.evaluate(
                 """() => {
-                    const sels = document.querySelectorAll(
-                        'td.rich-datascr-button, td.rich-datascr-act, td.rich-datascr-inact'
-                    );
-                    for (const td of sels) {
-                        const oc = td.getAttribute('onclick') || '';
+                    const all = document.querySelectorAll('[onclick]');
+                    for (const el of all) {
+                        const oc = el.getAttribute('onclick') || '';
                         if (oc.includes("'page': 'next'") || oc.includes('"page":"next"')) {
-                            if (td.className.includes('inact')) return false;
-                            td.click();
+                            const cls = el.className || '';
+                            if (cls.includes('inact') || cls.includes('disabled')) return false;
+                            el.click();
                             return true;
                         }
                     }
