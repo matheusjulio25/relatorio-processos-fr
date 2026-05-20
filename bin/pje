@@ -28,6 +28,18 @@ case "$cmd" in
     rm -f "$PLIST_DST"
     echo "agente desinstalado."
     ;;
+  setup-claude)
+    if ! command -v claude >/dev/null 2>&1; then
+      echo "ERRO: comando 'claude' nao encontrado. Instale o Claude Code primeiro."
+      exit 1
+    fi
+    claude mcp remove pje-trf5 2>/dev/null || true
+    claude mcp add pje-trf5 "$VENV/bin/python" -- -m coletor_pje.mcp_server
+    echo
+    echo "MCP server registrado no Claude Code."
+    echo "Abra um chat: cd $REPO && claude"
+    echo "Pergunte: 'Quais ferramentas voce tem do PJe?'"
+    ;;
   logs)
     tail -n 100 "$LOG_DIR/relatorio.log" "$LOG_DIR/relatorio.err" 2>/dev/null || echo "sem logs ainda."
     ;;
