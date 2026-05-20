@@ -55,7 +55,44 @@ async def cmd_detalhe(args):
         await page.goto(f"{PJE_BASE_URL}{ACERVO_PATH}", wait_until="domcontentloaded", timeout=60_000)
         await page.wait_for_selector("#tabAcervo_lbl", timeout=30_000)
         await page.locator("#tabAcervo_lbl").click()
-        await page.wait_for_selector("#txtConsultaContextoAcervo", timeout=30_000)
+        await page.wait_for_function(
+            "() => document.querySelectorAll('#formAbaAcervo\\\\:trAc td.rich-tree-node-icon[rich\\\\:onexpand]').length > 0",
+            timeout=60_000,
+        )
+        await page.wait_for_timeout(2_000)
+
+        qtd = await page.evaluate(
+            """() => {
+                const tds = document.querySelectorAll('#formAbaAcervo\\\\:trAc td.rich-tree-node-icon');
+                let n = 0;
+                for (const td of tds) {
+                    const code = td.getAttribute('rich:onexpand');
+                    if (!code) continue;
+                    try { new Function('event', code)(null); n++; } catch (e) {}
+                }
+                return n;
+            }"""
+        )
+        print(f"  cidades expandidas: {qtd}")
+        try:
+            await page.wait_for_function(
+                f"() => document.querySelectorAll('a[id$=\":-1::cxItem\"]').length >= {qtd}",
+                timeout=120_000,
+            )
+        except Exception:
+            pass
+        await page.wait_for_timeout(2_000)
+
+        ativou = await page.evaluate(
+            """() => {
+                const a = document.querySelector('a[id$=":-1::cxItem"]');
+                if (!a) return false;
+                a.onclick();
+                return true;
+            }"""
+        )
+        print(f"  ativou caixa: {ativou}")
+        await page.wait_for_timeout(6_000)
 
         print(f"buscando CNJ {args.numero}")
         await page.fill("#txtConsultaContextoAcervo", args.numero)
