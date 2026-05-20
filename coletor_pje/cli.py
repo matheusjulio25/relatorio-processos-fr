@@ -177,20 +177,26 @@ async def cmd_pecas(args):
                         if "documento/download" in (fr.url or ""):
                             frame = fr; break
                 if frame is not None:
+                    url_antes = frame.url
+                    err = None
                     try:
                         await frame.goto(src, wait_until="domcontentloaded", timeout=30_000)
-                    except Exception:
-                        pass
-                    await popup.wait_for_timeout(2_000)
+                    except Exception as ex:
+                        err = str(ex)[:100]
+                    await popup.wait_for_timeout(2_500)
+                    # re-busca o frame (iframe pode ter sido recriado)
+                    frame = popup.frame(name="frameHtml") or frame
+                    print(f"  [{d['id']}] frame antes={url_antes[-60:] if url_antes else '-'} | depois={frame.url[-60:]} | err={err}")
                     html_d = await frame.content()
                     try:
                         txt_d = await frame.inner_text("body")
                     except Exception:
                         txt_d = ""
-                    if len(html_d) > 1000 and txt_d.strip():
+                    if str(d["id"]) in (frame.url or "") and len(html_d) > 500:
                         (out_dir / f"{d['id']}_{slug}.html").write_text(html_d, encoding="utf-8")
-                        (out_dir / f"{d['id']}_{slug}.txt").write_text(txt_d, encoding="utf-8")
-                        print(f"  [{d['id']}] HTML salvo {len(html_d)}B / texto {len(txt_d)}B")
+                        if txt_d.strip():
+                            (out_dir / f"{d['id']}_{slug}.txt").write_text(txt_d, encoding="utf-8")
+                        print(f"    HTML salvo {len(html_d)}B / texto {len(txt_d)}B")
                         continue
             except Exception as e:
                 print(f"  [{d['id']}] iframe falhou: {e}")
