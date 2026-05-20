@@ -62,23 +62,42 @@ async def cmd_detalhe(args):
         await page.click("#btnPesquisarContexto")
         await page.wait_for_timeout(8_000)
 
-        async with ctx.expect_page(timeout=60_000) as popup_info:
-            ok = await page.evaluate(
-                """(cnj) => {
-                    const links = document.querySelectorAll('a[onclick*="listProcessoCompletoAdvogado"]');
-                    for (const a of links) {
-                        if ((a.getAttribute('onclick') || '').includes(cnj) ||
-                            (a.textContent || '').includes(cnj)) {
-                            a.click(); return 'by-text';
+        achados = await page.evaluate(
+            """() => {
+                const links = document.querySelectorAll('a[onclick*="listProcessoCompletoAdvogado"]');
+                return Array.from(links).slice(0,5).map(a => (a.getAttribute('onclick')||'').slice(0,200));
+            }"""
+        )
+        print(f"  links com onclick listProcesso achados: {len(achados)}")
+        for s in achados[:3]:
+            print(f"    {s[:140]}...")
+
+        if debug_dump := True:
+            (debug / f"busca_{args.numero}.html").write_text(await page.content(), encoding="utf-8")
+
+        try:
+            async with ctx.expect_page(timeout=30_000) as popup_info:
+                ok = await page.evaluate(
+                    """(cnj) => {
+                        const links = document.querySelectorAll('a[onclick*="listProcessoCompletoAdvogado"]');
+                        let target = null;
+                        for (const a of links) {
+                            if ((a.getAttribute('onclick') || '').includes(cnj) ||
+                                (a.textContent || '').includes(cnj)) { target = a; break; }
                         }
-                    }
-                    if (links.length > 0) { links[0].click(); return 'first'; }
-                    return 'none';
-                }""",
-                args.numero,
-            )
-        print(f"  link disparado: {ok}")
-        popup = await popup_info.value
+                        if (!target && links.length > 0) target = links[0];
+                        if (!target) return 'none';
+                        target.dispatchEvent(new MouseEvent('click', {bubbles:true, cancelable:true, view:window}));
+                        return 'dispatched';
+                    }""",
+                    args.numero,
+                )
+            print(f"  evaluate -> {ok}")
+            popup = await popup_info.value
+        except Exception as e:
+            print(f"  expect_page falhou: {e}")
+            return
+
         await popup.wait_for_load_state("domcontentloaded", timeout=60_000)
         await popup.wait_for_timeout(8_000)
 
