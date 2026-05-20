@@ -196,94 +196,166 @@ async def cmd_inspect(args):
         print(f"  {sample}")
 
 
+async def _baixar_pecas(popup, docs_top, out_dir, log_prefix=""):
+    """Para cada doc em docs_top: clica no timeline + XHR sync. Salva arquivos em out_dir.
+    Retorna lista de dicts {id, tipo, desc, ext, size, path, texto}."""
+    import base64
+    resultados = []
+    for d in docs_top:
+        slug = re.sub(r"[^A-Za-z0-9._-]+", "_", d["tipo"])[:40]
+        src = f"{PJE_BASE_URL}/pje/seam/resource/rest/pje-legacy/documento/download/{d['id']}"
+        await popup.evaluate(
+            """(docId) => {
+                const tw = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+                let target = null;
+                while (tw.nextNode()) {
+                    if (tw.currentNode.nodeValue && tw.currentNode.nodeValue.includes(docId)) {
+                        target = tw.currentNode.parentElement; break;
+                    }
+                }
+                if (!target) return;
+                let el = target;
+                for (let i = 0; i < 8 && el; i++) {
+                    if (el.tagName === 'A' && (el.getAttribute('onclick')||'').includes('divTimeLine')) {
+                        el.click(); return;
+                    }
+                    el = el.parentElement;
+                }
+                let cont = target;
+                for (let i = 0; i < 5 && cont; i++) { cont = cont.parentElement; }
+                if (cont) {
+                    const a = cont.querySelector('a[onclick*="divTimeLine"]');
+                    if (a) a.click();
+                }
+            }""",
+            d["id"],
+        )
+        await popup.wait_for_timeout(3_500)
+        try:
+            res = await popup.evaluate(
+                """(src) => {
+                    const xhr = new XMLHttpRequest();
+                    xhr.open('GET', src, false);
+                    xhr.overrideMimeType('text/plain; charset=x-user-defined');
+                    xhr.send();
+                    const ct = (xhr.getResponseHeader('content-type') || '').toLowerCase();
+                    const txt = xhr.responseText || '';
+                    const bytes = new Uint8Array(txt.length);
+                    for (let i = 0; i < txt.length; i++) bytes[i] = txt.charCodeAt(i) & 0xff;
+                    let bin = '';
+                    for (let i = 0; i < bytes.length; i += 0x8000) {
+                        bin += String.fromCharCode.apply(null, bytes.subarray(i, i+0x8000));
+                    }
+                    return {status: xhr.status, ctype: ct, size: bytes.length, b64: btoa(bin)};
+                }""",
+                src,
+            )
+            body = base64.b64decode(res["b64"])
+            ctype = res["ctype"]
+            ext = ".pdf" if "pdf" in ctype else (".html" if "html" in ctype else ".bin")
+            fp = out_dir / f"{d['id']}_{slug}{ext}"
+            fp.write_bytes(body)
+            texto = ""
+            if ext == ".html":
+                texto = re.sub(r"<[^>]+>", " ", body.decode("utf-8", errors="replace"))
+                texto = re.sub(r"\s+", " ", texto).strip()
+            print(f"{log_prefix}  [{d['id']}] {ctype} {len(body)}B -> {fp.name}")
+            resultados.append({"id": d["id"], "tipo": d["tipo"], "desc": d["desc"],
+                                "ext": ext, "size": len(body), "path": str(fp), "texto": texto})
+        except Exception as e:
+            print(f"{log_prefix}  [{d['id']}] erro: {e}")
+    return resultados
+
+
 async def cmd_pecas(args):
     """Baixa as 3 ultimas pecas relevantes (decisao/intimacao/peticao/sentenca/despacho)."""
     if not Manifest.load(args.numero):
         print(f"sem manifest para {args.numero}; rode `diff --apply` antes.")
         return
-
     out_dir = Path("pecas") / args.numero.replace("/", "_")
     out_dir.mkdir(parents=True, exist_ok=True)
-
     async with pje_context(headless=args.headless) as ctx:
         popup = await _abrir_detalhe(ctx, args.numero)
         html = await popup.content()
-
         docs = _parse_docs(html)
         relevantes = [d for d in docs if _e_relevante(d["tipo"])]
-        # prefere principais (sem desc ou comecando com "P ") sobre anexos ("A ...")
         relevantes.sort(key=lambda d: (d["desc"].startswith("A "), d["pos"]))
         top = relevantes[:args.n]
-
         print(f"docs total: {len(docs)}, relevantes: {len(relevantes)}, baixando top {len(top)}:")
         for d in top:
             print(f"  - {d['id']} | {d['tipo']} | {d['desc'][:60]}")
+        await _baixar_pecas(popup, top, out_dir)
 
-        import base64
-        for d in top:
-            slug = re.sub(r"[^A-Za-z0-9._-]+", "_", d["tipo"])[:40]
-            src = f"{PJE_BASE_URL}/pje/seam/resource/rest/pje-legacy/documento/download/{d['id']}"
-            # 1) clica no doc dentro do timeline pra setar state no servidor
-            clicado = await popup.evaluate(
-                """(docId) => {
-                    // 1) acha qualquer no de texto contendo o docId
-                    const tw = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-                    let target = null;
-                    while (tw.nextNode()) {
-                        if (tw.currentNode.nodeValue && tw.currentNode.nodeValue.includes(docId)) {
-                            target = tw.currentNode.parentElement; break;
-                        }
-                    }
-                    if (!target) return 'no-text-' + docId;
-                    // 2) sobe a arvore ate achar <a> com onclick A4J.AJAX.Submit em divTimeLine
-                    let el = target;
-                    for (let i = 0; i < 8 && el; i++) {
-                        if (el.tagName === 'A' && (el.getAttribute('onclick')||'').includes('divTimeLine')) {
-                            el.click(); return 'a: ' + el.id;
-                        }
-                        el = el.parentElement;
-                    }
-                    // 3) busca anchor descendente do container do texto
-                    let cont = target;
-                    for (let i = 0; i < 5 && cont; i++) { cont = cont.parentElement; }
-                    if (cont) {
-                        const a = cont.querySelector('a[onclick*="divTimeLine"]');
-                        if (a) { a.click(); return 'desc: ' + a.id; }
-                    }
-                    return 'no-anchor-' + docId;
-                }""",
-                d["id"],
-            )
-            print(f"  [{d['id']}] timeline click -> {clicado}")
-            await popup.wait_for_timeout(4_000)
+
+async def cmd_relatorio(args):
+    """Gera relatorio diario: lista, identifica novidades, extrai 1a peca de cada, monta MD."""
+    hoje = datetime.now().strftime("%Y-%m-%d")
+    rel_dir = Path("relatorios")
+    rel_dir.mkdir(parents=True, exist_ok=True)
+    out_md = rel_dir / f"relatorio-{hoje}.md"
+
+    print(f"[relatorio] coletando estado atual...")
+    async with pje_context(headless=args.headless) as ctx:
+        processos = [p async for p in listar_acervo(ctx, debug=False)]
+        pendentes = diff_acervo(processos)
+        print(f"[relatorio] {len(processos)} processos, {len(pendentes)} com novidade")
+        if args.limit:
+            pendentes = pendentes[: args.limit]
+            print(f"[relatorio] limitado a {len(pendentes)}")
+
+        linhas: list[str] = [f"# Relatório diário — {hoje}", "",
+                              f"**Acervo total:** {len(processos)} processos  ",
+                              f"**Com novidade hoje:** {len(pendentes)}", ""]
+
+        for i, p in enumerate(pendentes):
+            print(f"[relatorio] {i+1}/{len(pendentes)} {p.numero} ({p.ultima_movimentacao})")
+            linhas.append(f"## {p.numero}")
+            if p.titulo:
+                linhas.append(f"**Partes:** {p.titulo}  ")
+            if p.vara:
+                linhas.append(f"**Vara:** {p.vara}  ")
+            linhas.append(f"**Última movimentação:** {p.ultima_movimentacao} — {p.ultima_movimentacao_desc or '-'}  ")
             try:
-                res = await popup.evaluate(
-                    """(src) => {
-                        const xhr = new XMLHttpRequest();
-                        xhr.open('GET', src, false);
-                        xhr.overrideMimeType('text/plain; charset=x-user-defined');
-                        xhr.send();
-                        const ct = (xhr.getResponseHeader('content-type') || '').toLowerCase();
-                        const txt = xhr.responseText || '';
-                        // converte cada char (0..255) em byte
-                        const bytes = new Uint8Array(txt.length);
-                        for (let i = 0; i < txt.length; i++) bytes[i] = txt.charCodeAt(i) & 0xff;
-                        let bin = '';
-                        for (let i = 0; i < bytes.length; i += 0x8000) {
-                            bin += String.fromCharCode.apply(null, bytes.subarray(i, i+0x8000));
-                        }
-                        return {status: xhr.status, ctype: ct, size: bytes.length, b64: btoa(bin)};
-                    }""",
-                    src,
-                )
-                body = base64.b64decode(res["b64"])
-                ctype = res["ctype"]
-                ext = ".pdf" if "pdf" in ctype else (".html" if "html" in ctype else ".bin")
-                fp = out_dir / f"{d['id']}_{slug}{ext}"
-                fp.write_bytes(body)
-                print(f"  [{d['id']}] status={res['status']} ctype={ctype} {len(body)}B -> {fp.name}")
+                popup = await _abrir_detalhe(ctx, p.numero)
+                html = await popup.content()
+                docs = _parse_docs(html)
+                rels = [d for d in docs if _e_relevante(d["tipo"])]
+                rels.sort(key=lambda d: (d["desc"].startswith("A "), d["pos"]))
+                top = rels[:1]
+                if not top:
+                    linhas.append("_(sem peca relevante encontrada)_")
+                else:
+                    out_d = Path("pecas") / p.numero.replace("/", "_")
+                    out_d.mkdir(parents=True, exist_ok=True)
+                    res = await _baixar_pecas(popup, top, out_d, log_prefix="    ")
+                    if res and res[0]["texto"]:
+                        snippet = res[0]["texto"][:1500].strip()
+                        linhas.append(f"**Peça {res[0]['tipo']}** ({res[0]['id']}):")
+                        linhas.append("")
+                        linhas.append("> " + snippet.replace("\n", "\n> "))
+                    elif res:
+                        linhas.append(f"_(peca {res[0]['id']} salva como {res[0]['ext']}; sem texto extraivel)_")
+                await popup.close()
             except Exception as e:
-                print(f"  [{d['id']}] erro: {e}")
+                linhas.append(f"_(erro abrindo detalhe: {e})_")
+            linhas.append("")
+
+        # atualiza manifests
+        now = _now_iso()
+        for p in pendentes:
+            m = Manifest.load(p.numero) or Manifest(numero=p.numero)
+            m.titulo = p.titulo or m.titulo
+            m.vara = p.vara or m.vara
+            m.distribuido_em = p.distribuido_em or m.distribuido_em
+            m.ultima_movimentacao = p.ultima_movimentacao or m.ultima_movimentacao
+            m.ultima_movimentacao_desc = p.ultima_movimentacao_desc or m.ultima_movimentacao_desc
+            m.pje_id = p.pje_id or m.pje_id
+            m.pje_ca = p.pje_ca or m.pje_ca
+            m.ultima_coleta = now
+            m.save()
+
+    out_md.write_text("\n".join(linhas), encoding="utf-8")
+    print(f"\n[relatorio] salvo em {out_md}")
 
 
 async def cmd_diff(args):
@@ -330,9 +402,12 @@ def main():
     p_ins = sub.add_parser("inspect", help="diagnostico de tokens/storage da popup de detalhe")
     p_ins.add_argument("numero", help="CNJ do processo")
 
+    p_rel = sub.add_parser("relatorio", help="gera relatorio diario com novidades + texto da peca mais recente")
+    p_rel.add_argument("--limit", type=int, default=0, help="processa no maximo N novidades (0 = todas)")
+
     args = parser.parse_args()
     coro = {"listar": cmd_listar, "diff": cmd_diff, "detalhe": cmd_detalhe,
-            "pecas": cmd_pecas, "inspect": cmd_inspect}[args.cmd](args)
+            "pecas": cmd_pecas, "inspect": cmd_inspect, "relatorio": cmd_relatorio}[args.cmd](args)
     asyncio.run(coro)
 
 
