@@ -228,7 +228,6 @@ async def cmd_pecas(args):
                     """(src) => {
                         const xhr = new XMLHttpRequest();
                         xhr.open('GET', src, false);
-                        xhr.responseType = '';   // sync nao aceita arraybuffer; usamos overrideMimeType
                         xhr.overrideMimeType('text/plain; charset=x-user-defined');
                         xhr.send();
                         const ct = (xhr.getResponseHeader('content-type') || '').toLowerCase();
