@@ -219,54 +219,39 @@ async def cmd_pecas(args):
         for d in top:
             print(f"  - {d['id']} | {d['tipo']} | {d['desc'][:60]}")
 
+        import base64
         for d in top:
             slug = re.sub(r"[^A-Za-z0-9._-]+", "_", d["tipo"])[:40]
             src = f"{PJE_BASE_URL}/pje/seam/resource/rest/pje-legacy/documento/download/{d['id']}"
-            # 1) navega o iframe frameHtml (funciona pra HTML; PDF cai em <embed>)
             try:
-                frame = popup.frame(name="frameHtml")
-                if frame is None:
-                    for fr in popup.frames:
-                        if "documento/download" in (fr.url or ""):
-                            frame = fr; break
-                if frame is not None:
-                    url_antes = frame.url
-                    err = None
-                    try:
-                        await frame.goto(src, wait_until="domcontentloaded", timeout=30_000)
-                    except Exception as ex:
-                        err = str(ex)[:100]
-                    await popup.wait_for_timeout(2_500)
-                    # re-busca o frame (iframe pode ter sido recriado)
-                    frame = popup.frame(name="frameHtml") or frame
-                    print(f"  [{d['id']}] frame antes={url_antes[-60:] if url_antes else '-'} | depois={frame.url[-60:]} | err={err}")
-                    html_d = await frame.content()
-                    try:
-                        txt_d = await frame.inner_text("body")
-                    except Exception:
-                        txt_d = ""
-                    if str(d["id"]) in (frame.url or "") and len(html_d) > 500:
-                        (out_dir / f"{d['id']}_{slug}.html").write_text(html_d, encoding="utf-8")
-                        if txt_d.strip():
-                            (out_dir / f"{d['id']}_{slug}.txt").write_text(txt_d, encoding="utf-8")
-                        print(f"    HTML salvo {len(html_d)}B / texto {len(txt_d)}B")
-                        continue
-            except Exception as e:
-                print(f"  [{d['id']}] iframe falhou: {e}")
-
-            # 2) PDF: baixa binario via context.request com Referer da popup
-            try:
-                resp = await popup.context.request.get(
-                    src, headers={"Referer": popup.url, "Accept": "*/*"}, timeout=60_000,
+                res = await popup.evaluate(
+                    """(src) => {
+                        const xhr = new XMLHttpRequest();
+                        xhr.open('GET', src, false);
+                        xhr.responseType = '';   // sync nao aceita arraybuffer; usamos overrideMimeType
+                        xhr.overrideMimeType('text/plain; charset=x-user-defined');
+                        xhr.send();
+                        const ct = (xhr.getResponseHeader('content-type') || '').toLowerCase();
+                        const txt = xhr.responseText || '';
+                        // converte cada char (0..255) em byte
+                        const bytes = new Uint8Array(txt.length);
+                        for (let i = 0; i < txt.length; i++) bytes[i] = txt.charCodeAt(i) & 0xff;
+                        let bin = '';
+                        for (let i = 0; i < bytes.length; i += 0x8000) {
+                            bin += String.fromCharCode.apply(null, bytes.subarray(i, i+0x8000));
+                        }
+                        return {status: xhr.status, ctype: ct, size: bytes.length, b64: btoa(bin)};
+                    }""",
+                    src,
                 )
-                body = await resp.body()
-                ctype = resp.headers.get("content-type", "")
-                ext = ".pdf" if "pdf" in ctype else ".bin"
+                body = base64.b64decode(res["b64"])
+                ctype = res["ctype"]
+                ext = ".pdf" if "pdf" in ctype else (".html" if "html" in ctype else ".bin")
                 fp = out_dir / f"{d['id']}_{slug}{ext}"
                 fp.write_bytes(body)
-                print(f"  [{d['id']}] binario {len(body)}B ({ctype}) -> {fp.name}")
+                print(f"  [{d['id']}] status={res['status']} ctype={ctype} {len(body)}B -> {fp.name}")
             except Exception as e:
-                print(f"  [{d['id']}] binario falhou: {e}")
+                print(f"  [{d['id']}] erro: {e}")
 
 
 async def cmd_diff(args):
