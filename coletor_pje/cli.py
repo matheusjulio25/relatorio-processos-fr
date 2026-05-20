@@ -168,26 +168,24 @@ async def cmd_pecas(args):
 
         for d in top:
             try:
-                src = f"/pje/seam/resource/rest/pje-legacy/documento/download/{d['id']}"
-                # troca o src do iframe frameHtml e espera carregar
-                await popup.evaluate(
-                    """(src) => {
-                        const f = document.getElementById('frameHtml');
-                        if (!f) throw new Error('frameHtml nao encontrado');
-                        f.setAttribute('src', src);
-                    }""",
-                    src,
-                )
-                # espera o iframe ter o frame
-                await popup.wait_for_timeout(6_000)
-                frame = popup.frame(name="frameHtml") or next(
-                    (f for f in popup.frames if "documento/download" in (f.url or "")), None
-                )
+                src = f"{PJE_BASE_URL}/pje/seam/resource/rest/pje-legacy/documento/download/{d['id']}"
+                frame = popup.frame(name="frameHtml")
                 if frame is None:
-                    print(f"  [{d['id']}] frame nao localizado")
-                    continue
+                    # fallback: pega 1o iframe da popup
+                    for fr in popup.frames:
+                        if "documento/download" in (fr.url or ""):
+                            frame = fr; break
+                if frame is None:
+                    print(f"  [{d['id']}] frame nao localizado"); continue
+
+                await frame.goto(src, wait_until="domcontentloaded", timeout=60_000)
+                await popup.wait_for_timeout(3_000)
                 conteudo_html = await frame.content()
-                conteudo_txt = await frame.inner_text("body") if conteudo_html else ""
+                try:
+                    conteudo_txt = await frame.inner_text("body")
+                except Exception:
+                    conteudo_txt = ""
+
                 slug = re.sub(r"[^A-Za-z0-9._-]+", "_", d["tipo"])[:40]
                 (out_dir / f"{d['id']}_{slug}.html").write_text(conteudo_html, encoding="utf-8")
                 if conteudo_txt.strip():
