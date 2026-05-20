@@ -33,30 +33,64 @@ async def cmd_listar(args):
 
 
 async def cmd_detalhe(args):
-    """Abre 1 processo pelo CNJ usando id/ca do manifest e dumpa HTML em debug/."""
+    """Abre 1 processo via popup do painel (sessao correta) e dumpa HTML em debug/.
+
+    Fluxo: vai pro painel -> Acervo -> usa o campo de busca por CNJ -> clica no
+    link da listagem -> captura a popup que o PJe abre (window.open + AJAX que
+    prepara contexto). Navegar direto pra listProcessoCompletoAdvogado.seam cai
+    em error.seam porque pula a AJAX de contexto.
+    """
     from pathlib import Path
+    from .acervo import ACERVO_PATH
 
     m = Manifest.load(args.numero)
-    if not m or not m.pje_id or not m.pje_ca:
-        print(f"manifest sem pje_id/pje_ca para {args.numero}; rode `diff --apply` antes.")
+    if not m:
+        print(f"sem manifest para {args.numero}; rode `diff --apply` antes.")
         return
 
     debug = Path("debug")
     debug.mkdir(exist_ok=True)
-    url = (
-        f"{PJE_BASE_URL}/pje/Processo/ConsultaProcesso/Detalhe/"
-        f"listProcessoCompletoAdvogado.seam?id={m.pje_id}&ca={m.pje_ca}"
-    )
-    print(f"abrindo {url}")
     async with pje_context(headless=args.headless) as ctx:
-        page = await ctx.new_page()
-        await page.goto(url, wait_until="domcontentloaded", timeout=60_000)
+        page = ctx.pages[0] if ctx.pages else await ctx.new_page()
+        await page.goto(f"{PJE_BASE_URL}{ACERVO_PATH}", wait_until="domcontentloaded", timeout=60_000)
+        await page.wait_for_selector("#tabAcervo_lbl", timeout=30_000)
+        await page.locator("#tabAcervo_lbl").click()
+        await page.wait_for_selector("#txtConsultaContextoAcervo", timeout=30_000)
+
+        print(f"buscando CNJ {args.numero}")
+        await page.fill("#txtConsultaContextoAcervo", args.numero)
+        await page.click("#btnPesquisarContexto")
         await page.wait_for_timeout(8_000)
-        out = debug / f"detalhe_{args.numero}.html"
-        out.write_text(await page.content(), encoding="utf-8")
-        png = debug / f"detalhe_{args.numero}.png"
-        await page.screenshot(path=str(png), full_page=True)
-        print(f"salvo: {out} ({out.stat().st_size} bytes) e {png}")
+
+        async with ctx.expect_page(timeout=60_000) as popup_info:
+            ok = await page.evaluate(
+                """(cnj) => {
+                    const links = document.querySelectorAll('a[onclick*="listProcessoCompletoAdvogado"]');
+                    for (const a of links) {
+                        if ((a.getAttribute('onclick') || '').includes(cnj) ||
+                            (a.textContent || '').includes(cnj)) {
+                            a.click(); return 'by-text';
+                        }
+                    }
+                    if (links.length > 0) { links[0].click(); return 'first'; }
+                    return 'none';
+                }""",
+                args.numero,
+            )
+        print(f"  link disparado: {ok}")
+        popup = await popup_info.value
+        await popup.wait_for_load_state("domcontentloaded", timeout=60_000)
+        await popup.wait_for_timeout(8_000)
+
+        safe = args.numero.replace("/", "_")
+        out = debug / f"detalhe_{safe}.html"
+        out.write_text(await popup.content(), encoding="utf-8")
+        png = debug / f"detalhe_{safe}.png"
+        try:
+            await popup.screenshot(path=str(png), full_page=True)
+        except Exception as e:
+            print(f"  screenshot falhou: {e}")
+        print(f"salvo: {out} ({out.stat().st_size} bytes), url popup: {popup.url}")
 
 
 async def cmd_diff(args):
