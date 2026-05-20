@@ -1,19 +1,32 @@
-"""CLI do coletor.
-
-Uso:
-    python -m coletor_pje.cli listar          # lista todo o acervo
-    python -m coletor_pje.cli diff            # mostra só o delta vs manifests/
-    python -m coletor_pje.cli diff --apply    # atualiza manifests com o delta
-"""
+"""CLI do coletor."""
 from __future__ import annotations
 
 import argparse
 import asyncio
+import re
 from datetime import datetime, timezone
+from pathlib import Path
 
 from .acervo import listar_acervo
 from .login import pje_context, PJE_BASE_URL
 from .manifest import Manifest, diff_acervo
+
+# tipos de documento que queremos analisar (case-insensitive)
+TIPOS_RELEVANTES = ("decisão", "decisao", "intimação", "intimacao",
+                    "petição", "peticao", "sentença", "sentenca", "despacho")
+# vetos (mesmo que match em relevantes, descarta)
+TIPOS_VETO = ("certidão", "certidao")
+
+DOC_RE = re.compile(
+    r'(\d{7,12})\s*-\s*([A-Za-zÀ-ÿ ()]+?)(?:\s*\(([^)]{0,200})\))?(?=\s*<|\s*\d{7,12}\s*-)'
+)
+
+
+def _e_relevante(tipo: str) -> bool:
+    t = tipo.lower().strip()
+    if any(v in t for v in TIPOS_VETO):
+        return False
+    return any(r in t for r in TIPOS_RELEVANTES)
 
 
 async def _coletar(headless: bool, debug: bool = False):
@@ -32,17 +45,89 @@ async def cmd_listar(args):
     print(f"\nTotal: {len(processos)}")
 
 
-async def cmd_detalhe(args):
-    """Abre 1 processo via popup do painel (sessao correta) e dumpa HTML em debug/.
-
-    Fluxo: vai pro painel -> Acervo -> usa o campo de busca por CNJ -> clica no
-    link da listagem -> captura a popup que o PJe abre (window.open + AJAX que
-    prepara contexto). Navegar direto pra listProcessoCompletoAdvogado.seam cai
-    em error.seam porque pula a AJAX de contexto.
-    """
-    from pathlib import Path
+async def _abrir_detalhe(ctx, cnj: str):
+    """Navega ate o painel, busca o CNJ, dispara o link e devolve a popup."""
     from .acervo import ACERVO_PATH
 
+    page = ctx.pages[0] if ctx.pages else await ctx.new_page()
+    await page.goto(f"{PJE_BASE_URL}{ACERVO_PATH}", wait_until="domcontentloaded", timeout=60_000)
+    await page.wait_for_selector("#tabAcervo_lbl", timeout=30_000)
+    await page.locator("#tabAcervo_lbl").click()
+    await page.wait_for_function(
+        "() => document.querySelectorAll('#formAbaAcervo\\\\:trAc td.rich-tree-node-icon[rich\\\\:onexpand]').length > 0",
+        timeout=60_000,
+    )
+    await page.wait_for_timeout(2_000)
+
+    qtd = await page.evaluate(
+        """() => {
+            const tds = document.querySelectorAll('#formAbaAcervo\\\\:trAc td.rich-tree-node-icon');
+            let n = 0;
+            for (const td of tds) {
+                const code = td.getAttribute('rich:onexpand');
+                if (!code) continue;
+                try { new Function('event', code)(null); n++; } catch (e) {}
+            }
+            return n;
+        }"""
+    )
+    try:
+        await page.wait_for_function(
+            f"() => document.querySelectorAll('a[id$=\":-1::cxItem\"]').length >= {qtd}",
+            timeout=120_000,
+        )
+    except Exception:
+        pass
+    await page.wait_for_timeout(2_000)
+
+    await page.evaluate(
+        """() => {
+            const a = document.querySelector('a[id$=":-1::cxItem"]');
+            if (a) a.onclick();
+        }"""
+    )
+    await page.wait_for_timeout(6_000)
+
+    await page.fill("#txtConsultaContextoAcervo", cnj)
+    await page.click("#btnPesquisarContexto")
+    await page.wait_for_timeout(8_000)
+
+    async with ctx.expect_page(timeout=30_000) as popup_info:
+        await page.evaluate(
+            """(cnj) => {
+                const links = document.querySelectorAll('a[onclick*="listProcessoCompletoAdvogado"]');
+                let target = null;
+                for (const a of links) {
+                    if ((a.getAttribute('onclick') || '').includes(cnj) ||
+                        (a.textContent || '').includes(cnj)) { target = a; break; }
+                }
+                if (!target && links.length > 0) target = links[0];
+                if (target) target.dispatchEvent(
+                    new MouseEvent('click', {bubbles:true, cancelable:true, view:window}));
+            }""",
+            cnj,
+        )
+    popup = await popup_info.value
+    await popup.wait_for_load_state("domcontentloaded", timeout=60_000)
+    await popup.wait_for_timeout(8_000)
+    return popup
+
+
+def _parse_docs(html: str) -> list[dict]:
+    """Extrai documentos da popup de detalhe. Ordem do HTML = ordem cronologica reversa."""
+    docs: list[dict] = []
+    vistos: set[str] = set()
+    for m in DOC_RE.finditer(html):
+        did, tipo, desc = m.group(1), m.group(2).strip(), (m.group(3) or "").strip()
+        if did in vistos:
+            continue
+        vistos.add(did)
+        docs.append({"id": did, "tipo": tipo, "desc": desc, "pos": m.start()})
+    return docs
+
+
+async def cmd_detalhe(args):
+    """Abre 1 processo via popup do painel e dumpa HTML em debug/."""
     m = Manifest.load(args.numero)
     if not m:
         print(f"sem manifest para {args.numero}; rode `diff --apply` antes.")
@@ -51,102 +136,50 @@ async def cmd_detalhe(args):
     debug = Path("debug")
     debug.mkdir(exist_ok=True)
     async with pje_context(headless=args.headless) as ctx:
-        page = ctx.pages[0] if ctx.pages else await ctx.new_page()
-        await page.goto(f"{PJE_BASE_URL}{ACERVO_PATH}", wait_until="domcontentloaded", timeout=60_000)
-        await page.wait_for_selector("#tabAcervo_lbl", timeout=30_000)
-        await page.locator("#tabAcervo_lbl").click()
-        await page.wait_for_function(
-            "() => document.querySelectorAll('#formAbaAcervo\\\\:trAc td.rich-tree-node-icon[rich\\\\:onexpand]').length > 0",
-            timeout=60_000,
-        )
-        await page.wait_for_timeout(2_000)
-
-        qtd = await page.evaluate(
-            """() => {
-                const tds = document.querySelectorAll('#formAbaAcervo\\\\:trAc td.rich-tree-node-icon');
-                let n = 0;
-                for (const td of tds) {
-                    const code = td.getAttribute('rich:onexpand');
-                    if (!code) continue;
-                    try { new Function('event', code)(null); n++; } catch (e) {}
-                }
-                return n;
-            }"""
-        )
-        print(f"  cidades expandidas: {qtd}")
-        try:
-            await page.wait_for_function(
-                f"() => document.querySelectorAll('a[id$=\":-1::cxItem\"]').length >= {qtd}",
-                timeout=120_000,
-            )
-        except Exception:
-            pass
-        await page.wait_for_timeout(2_000)
-
-        ativou = await page.evaluate(
-            """() => {
-                const a = document.querySelector('a[id$=":-1::cxItem"]');
-                if (!a) return false;
-                a.onclick();
-                return true;
-            }"""
-        )
-        print(f"  ativou caixa: {ativou}")
-        await page.wait_for_timeout(6_000)
-
-        print(f"buscando CNJ {args.numero}")
-        await page.fill("#txtConsultaContextoAcervo", args.numero)
-        await page.click("#btnPesquisarContexto")
-        await page.wait_for_timeout(8_000)
-
-        achados = await page.evaluate(
-            """() => {
-                const links = document.querySelectorAll('a[onclick*="listProcessoCompletoAdvogado"]');
-                return Array.from(links).slice(0,5).map(a => (a.getAttribute('onclick')||'').slice(0,200));
-            }"""
-        )
-        print(f"  links com onclick listProcesso achados: {len(achados)}")
-        for s in achados[:3]:
-            print(f"    {s[:140]}...")
-
-        if debug_dump := True:
-            (debug / f"busca_{args.numero}.html").write_text(await page.content(), encoding="utf-8")
-
-        try:
-            async with ctx.expect_page(timeout=30_000) as popup_info:
-                ok = await page.evaluate(
-                    """(cnj) => {
-                        const links = document.querySelectorAll('a[onclick*="listProcessoCompletoAdvogado"]');
-                        let target = null;
-                        for (const a of links) {
-                            if ((a.getAttribute('onclick') || '').includes(cnj) ||
-                                (a.textContent || '').includes(cnj)) { target = a; break; }
-                        }
-                        if (!target && links.length > 0) target = links[0];
-                        if (!target) return 'none';
-                        target.dispatchEvent(new MouseEvent('click', {bubbles:true, cancelable:true, view:window}));
-                        return 'dispatched';
-                    }""",
-                    args.numero,
-                )
-            print(f"  evaluate -> {ok}")
-            popup = await popup_info.value
-        except Exception as e:
-            print(f"  expect_page falhou: {e}")
-            return
-
-        await popup.wait_for_load_state("domcontentloaded", timeout=60_000)
-        await popup.wait_for_timeout(8_000)
-
+        popup = await _abrir_detalhe(ctx, args.numero)
         safe = args.numero.replace("/", "_")
         out = debug / f"detalhe_{safe}.html"
         out.write_text(await popup.content(), encoding="utf-8")
-        png = debug / f"detalhe_{safe}.png"
-        try:
-            await popup.screenshot(path=str(png), full_page=True)
-        except Exception as e:
-            print(f"  screenshot falhou: {e}")
-        print(f"salvo: {out} ({out.stat().st_size} bytes), url popup: {popup.url}")
+        print(f"salvo: {out} ({out.stat().st_size} bytes), url: {popup.url}")
+
+
+async def cmd_pecas(args):
+    """Baixa as 3 ultimas pecas relevantes (decisao/intimacao/peticao/sentenca/despacho)."""
+    if not Manifest.load(args.numero):
+        print(f"sem manifest para {args.numero}; rode `diff --apply` antes.")
+        return
+
+    out_dir = Path("pecas") / args.numero.replace("/", "_")
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    async with pje_context(headless=args.headless) as ctx:
+        popup = await _abrir_detalhe(ctx, args.numero)
+        html = await popup.content()
+
+        docs = _parse_docs(html)
+        relevantes = [d for d in docs if _e_relevante(d["tipo"])]
+        # menor pos = mais cedo no HTML do PJe = mais recente
+        relevantes.sort(key=lambda d: d["pos"])
+        top = relevantes[:args.n]
+
+        print(f"docs total: {len(docs)}, relevantes: {len(relevantes)}, baixando top {len(top)}:")
+        for d in top:
+            print(f"  - {d['id']} | {d['tipo']} | {d['desc'][:60]}")
+
+        for d in top:
+            url = f"{PJE_BASE_URL}/pje/seam/resource/rest/pje-legacy/documento/download/{d['id']}"
+            try:
+                resp = await popup.request.get(url, timeout=60_000)
+                status = resp.status
+                ctype = resp.headers.get("content-type", "")
+                body = await resp.body()
+                ext = ".pdf" if "pdf" in ctype else (".html" if "html" in ctype else ".bin")
+                slug = re.sub(r"[^A-Za-z0-9._-]+", "_", d["tipo"])[:40]
+                fp = out_dir / f"{d['id']}_{slug}{ext}"
+                fp.write_bytes(body)
+                print(f"  baixado {fp.name} ({len(body)} bytes, {status}, {ctype})")
+            except Exception as e:
+                print(f"  erro baixando {d['id']}: {e}")
 
 
 async def cmd_diff(args):
@@ -183,8 +216,12 @@ def main():
     p_det = sub.add_parser("detalhe", help="abre 1 processo e dumpa HTML em debug/")
     p_det.add_argument("numero", help="CNJ do processo (precisa ter manifest com pje_id/pje_ca)")
 
+    p_pec = sub.add_parser("pecas", help="baixa N pecas relevantes (decisao/intimacao/peticao)")
+    p_pec.add_argument("numero", help="CNJ do processo")
+    p_pec.add_argument("-n", type=int, default=3, help="quantas pecas (default 3)")
+
     args = parser.parse_args()
-    coro = {"listar": cmd_listar, "diff": cmd_diff, "detalhe": cmd_detalhe}[args.cmd](args)
+    coro = {"listar": cmd_listar, "diff": cmd_diff, "detalhe": cmd_detalhe, "pecas": cmd_pecas}[args.cmd](args)
     asyncio.run(coro)
 
 
