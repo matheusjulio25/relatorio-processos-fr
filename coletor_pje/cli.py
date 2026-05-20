@@ -41,7 +41,7 @@ def _now_iso() -> str:
 async def cmd_listar(args):
     processos = await _coletar(headless=args.headless, debug=args.debug)
     for p in processos:
-        print(f"{p.numero}\t{p.pje_id or '-'}\t{p.pje_ca or '-'}\t{p.titulo or ''}")
+        print(f"{p.numero}\t{p.ultima_movimentacao or '-'}\t{p.vara or '-'}\t{(p.titulo or '')[:60]}")
     print(f"\nTotal: {len(processos)}")
 
 
@@ -297,8 +297,11 @@ async def cmd_diff(args):
         for p in pendentes:
             m = Manifest.load(p.numero) or Manifest(numero=p.numero)
             m.classe = p.classe
-            m.titulo = p.titulo
-            m.ultima_movimentacao = p.ultima_movimentacao
+            m.titulo = p.titulo or m.titulo
+            m.vara = p.vara or m.vara
+            m.distribuido_em = p.distribuido_em or m.distribuido_em
+            m.ultima_movimentacao = p.ultima_movimentacao or m.ultima_movimentacao
+            m.ultima_movimentacao_desc = p.ultima_movimentacao_desc or m.ultima_movimentacao_desc
             m.pje_id = p.pje_id or m.pje_id
             m.pje_ca = p.pje_ca or m.pje_ca
             m.ultima_coleta = now

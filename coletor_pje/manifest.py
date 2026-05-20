@@ -15,7 +15,10 @@ class Manifest:
     numero: str
     classe: str | None = None
     titulo: str | None = None
+    vara: str | None = None
+    distribuido_em: str | None = None
     ultima_movimentacao: str | None = None
+    ultima_movimentacao_desc: str | None = None
     pje_id: str | None = None
     pje_ca: str | None = None
     pecas: dict[str, str] = field(default_factory=dict)  # id -> sha256

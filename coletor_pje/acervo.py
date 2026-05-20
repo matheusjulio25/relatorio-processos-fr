@@ -39,26 +39,62 @@ DEBUG_DIR = Path(os.getenv("DEBUG_DIR", "debug"))
 
 ACERVO_PATH = "/pje/Painel/painel_usuario/advogado.seam"
 NUMERO_RE = re.compile(r"\d{7}-\d{2}\.\d{4}\.\d\.\d{2}\.\d{4}")
-# Cada linha da listagem tem o onclick window.open('...?id=X&amp;ca=Y',...);
-# pareamos com o CNJ que aparece logo em seguida no mesmo bloco da linha.
+# Linha completa de cada processo na listagem. Estrutura visivel (apos tira-tags):
+#   ... id=X&ca=Y ... PJEC 0044724-68... NOMEAUT X NOMEREU /30ª Vara Federal PE
+#   Distribuído em DD/MM/YYYY Último movimento: DD/MM/YYYY HH:MM - <descricao>. <a class="btn ...
+# Capturamos id+ca, CNJ, partes/vara (string solta), data distrib, ultima mov.
+# Bloco entre o link e o proximo botao "btn btn-default btn-sm" (proxima acao) tem tudo.
 LINHA_RE = re.compile(
     r"listProcessoCompletoAdvogado\.seam\?id=(\d+)&(?:amp;)?ca=([0-9a-f]+)"
-    r".{0,4000}?(\d{7}-\d{2}\.\d{4}\.\d\.\d{2}\.\d{4})",
+    r".{0,5000}?(\d{7}-\d{2}\.\d{4}\.\d\.\d{2}\.\d{4})"
+    r"(?P<rest>.{0,3000}?)<a\s",
     re.S,
 )
+ULT_MOV_RE = re.compile(
+    r"[Úu]ltimo movimento:\s*(\d{2}/\d{2}/\d{4}(?:\s+\d{2}:\d{2})?)\s*-\s*([^<\n]+)"
+)
+DISTRIB_RE = re.compile(r"Distribu[ií]do em\s*(\d{2}/\d{2}/\d{4})")
 
 
 @dataclass
 class ProcessoAcervo:
     numero: str
     classe: str | None = None
-    ultima_movimentacao: str | None = None
-    titulo: str | None = None
+    titulo: str | None = None  # partes "AUTOR X REU"
+    vara: str | None = None
+    distribuido_em: str | None = None  # DD/MM/YYYY
+    ultima_movimentacao: str | None = None  # data DD/MM/YYYY HH:MM
+    ultima_movimentacao_desc: str | None = None
     pje_id: str | None = None
     pje_ca: str | None = None
 
     def key(self) -> str:
         return self.numero
+
+
+def _parse_linha_resto(resto_html: str) -> dict:
+    """Extrai partes, vara, distribuicao e ultima mov do bloco apos o CNJ."""
+    # remove tags pra ter texto limpo
+    txt = re.sub(r"<[^>]+>", " ", resto_html)
+    txt = re.sub(r"\s+", " ", txt).strip()
+    out: dict = {}
+
+    m = ULT_MOV_RE.search(txt)
+    if m:
+        out["ultima_movimentacao"] = m.group(1).strip()
+        out["ultima_movimentacao_desc"] = m.group(2).strip().rstrip(".")
+    m = DISTRIB_RE.search(txt)
+    if m:
+        out["distribuido_em"] = m.group(1)
+    # partes + vara: tudo entre o inicio e "Distribuído em"
+    cab = re.split(r"Distribu[ií]do em", txt, maxsplit=1)[0].strip()
+    if "/" in cab:
+        partes, _, vara = cab.rpartition("/")
+        out["titulo"] = partes.strip().rstrip(",")
+        out["vara"] = vara.strip()
+    elif cab:
+        out["titulo"] = cab
+    return out
 
 
 def _parse_data(raw: str | None) -> str | None:
@@ -147,12 +183,14 @@ async def listar_acervo(ctx: BrowserContext, debug: bool = False) -> AsyncIterat
                 debug_caixas.append((f"{cidade_id}_p{pagina}", html))
 
             antes_pag = len(vistos)
-            for pje_id, pje_ca, numero in LINHA_RE.findall(html):
+            for m in LINHA_RE.finditer(html):
+                pje_id, pje_ca, numero = m.group(1), m.group(2), m.group(3)
                 if numero in vistos:
                     continue
                 vistos.add(numero)
+                extra = _parse_linha_resto(m.group("rest"))
                 yield ProcessoAcervo(
-                    numero=numero, pje_id=pje_id, pje_ca=pje_ca
+                    numero=numero, pje_id=pje_id, pje_ca=pje_ca, **extra
                 )
             novos = len(vistos) - antes_pag
 
