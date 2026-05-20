@@ -143,6 +143,59 @@ async def cmd_detalhe(args):
         print(f"salvo: {out} ({out.stat().st_size} bytes), url: {popup.url}")
 
 
+async def cmd_inspect(args):
+    """Inspeciona popup do detalhe atras de tokens de auth (localStorage, sessionStorage, window vars, cookies)."""
+    if not Manifest.load(args.numero):
+        print(f"sem manifest para {args.numero}; rode `diff --apply` antes.")
+        return
+    async with pje_context(headless=args.headless) as ctx:
+        popup = await _abrir_detalhe(ctx, args.numero)
+        diag = await popup.evaluate(
+            """() => {
+                const out = {ls:{}, ss:{}, wins:[], cookies: document.cookie};
+                try { for (const k of Object.keys(localStorage)) out.ls[k] = (localStorage.getItem(k)||'').slice(0,300); } catch(e){}
+                try { for (const k of Object.keys(sessionStorage)) out.ss[k] = (sessionStorage.getItem(k)||'').slice(0,300); } catch(e){}
+                for (const k of Object.keys(window)) {
+                    if (/token|auth|pje|jwt|bearer/i.test(k)) {
+                        try {
+                            const v = window[k];
+                            const repr = typeof v === 'string' ? v.slice(0,300) :
+                                         typeof v === 'object' ? JSON.stringify(v).slice(0,300) : String(v);
+                            out.wins.push({k, type: typeof v, repr});
+                        } catch(e){}
+                    }
+                }
+                return out;
+            }"""
+        )
+        print("=== localStorage ===")
+        for k, v in diag["ls"].items():
+            print(f"  {k} = {v[:200]}")
+        print("=== sessionStorage ===")
+        for k, v in diag["ss"].items():
+            print(f"  {k} = {v[:200]}")
+        print("=== window vars (token/auth/pje/jwt) ===")
+        for w in diag["wins"]:
+            print(f"  {w['k']} ({w['type']}) = {w['repr'][:200]}")
+        print(f"=== cookies ===\n  {diag['cookies'][:500]}")
+
+        # Tambem inspeciona requests do iframe (HARLITE)
+        print("=== headers do iframe (fetch via XHR para rastrear) ===")
+        sample = await popup.evaluate(
+            """async () => {
+                const f = document.getElementById('frameHtml');
+                if (!f) return 'sem frame';
+                const src = f.src;
+                const xhr = new XMLHttpRequest();
+                xhr.open('GET', src, false);
+                try { xhr.send(); } catch(e){ return 'send err:'+e.message; }
+                return {status: xhr.status, headers: xhr.getAllResponseHeaders().slice(0,1000),
+                        bodyLen: xhr.responseText.length, bodySample: xhr.responseText.slice(0,200)};
+            }"""
+        )
+        print(f"  {sample}")
+
+
 async def cmd_pecas(args):
     """Baixa as 3 ultimas pecas relevantes (decisao/intimacao/peticao/sentenca/despacho)."""
     if not Manifest.load(args.numero):
@@ -254,8 +307,12 @@ def main():
     p_pec.add_argument("numero", help="CNJ do processo")
     p_pec.add_argument("-n", type=int, default=3, help="quantas pecas (default 3)")
 
+    p_ins = sub.add_parser("inspect", help="diagnostico de tokens/storage da popup de detalhe")
+    p_ins.add_argument("numero", help="CNJ do processo")
+
     args = parser.parse_args()
-    coro = {"listar": cmd_listar, "diff": cmd_diff, "detalhe": cmd_detalhe, "pecas": cmd_pecas}[args.cmd](args)
+    coro = {"listar": cmd_listar, "diff": cmd_diff, "detalhe": cmd_detalhe,
+            "pecas": cmd_pecas, "inspect": cmd_inspect}[args.cmd](args)
     asyncio.run(coro)
 
 
