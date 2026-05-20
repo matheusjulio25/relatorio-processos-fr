@@ -226,15 +226,31 @@ async def cmd_pecas(args):
             # 1) clica no doc dentro do timeline pra setar state no servidor
             clicado = await popup.evaluate(
                 """(docId) => {
-                    // procura algum elemento clicavel que contenha o docId em onclick ou href
-                    const all = document.querySelectorAll('[onclick]');
-                    for (const el of all) {
-                        const oc = el.getAttribute('onclick') || '';
-                        if (oc.includes(docId) && (oc.includes('A4J.AJAX.Submit') || oc.includes('idProcessoDocumento'))) {
-                            try { el.click(); return 'clicked: '+(el.tagName)+'#'+(el.id||''); } catch(e) {}
+                    // 1) acha qualquer no de texto contendo o docId
+                    const tw = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+                    let target = null;
+                    while (tw.nextNode()) {
+                        if (tw.currentNode.nodeValue && tw.currentNode.nodeValue.includes(docId)) {
+                            target = tw.currentNode.parentElement; break;
                         }
                     }
-                    return 'no-handler-for-'+docId;
+                    if (!target) return 'no-text-' + docId;
+                    // 2) sobe a arvore ate achar <a> com onclick A4J.AJAX.Submit em divTimeLine
+                    let el = target;
+                    for (let i = 0; i < 8 && el; i++) {
+                        if (el.tagName === 'A' && (el.getAttribute('onclick')||'').includes('divTimeLine')) {
+                            el.click(); return 'a: ' + el.id;
+                        }
+                        el = el.parentElement;
+                    }
+                    // 3) busca anchor descendente do container do texto
+                    let cont = target;
+                    for (let i = 0; i < 5 && cont; i++) { cont = cont.parentElement; }
+                    if (cont) {
+                        const a = cont.querySelector('a[onclick*="divTimeLine"]');
+                        if (a) { a.click(); return 'desc: ' + a.id; }
+                    }
+                    return 'no-anchor-' + docId;
                 }""",
                 d["id"],
             )
