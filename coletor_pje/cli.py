@@ -166,38 +166,25 @@ async def cmd_pecas(args):
         for d in top:
             print(f"  - {d['id']} | {d['tipo']} | {d['desc'][:60]}")
 
-        import base64
         for d in top:
-            url = f"/pje/seam/resource/rest/pje-legacy/documento/download/{d['id']}"
+            url = f"{PJE_BASE_URL}/pje/seam/resource/rest/pje-legacy/documento/download/{d['id']}"
             try:
-                resultado = await popup.evaluate(
-                    """async (path) => {
-                        const r = await fetch(path, {credentials: 'include', redirect: 'follow'});
-                        const headers = {};
-                        r.headers.forEach((v,k) => headers[k] = v);
-                        const buf = await r.arrayBuffer();
-                        const bytes = new Uint8Array(buf);
-                        let bin = '';
-                        for (let i = 0; i < bytes.length; i += 0x8000) {
-                            bin += String.fromCharCode.apply(null, bytes.subarray(i, i+0x8000));
-                        }
-                        return {
-                            status: r.status, url: r.url, type: r.type,
-                            headers: headers, size: bytes.length, b64: btoa(bin),
-                        };
-                    }""",
-                    url,
-                )
-                print(f"  [{d['id']}] status={resultado['status']} type={resultado['type']} size={resultado['size']} url={resultado['url']}")
-                print(f"    headers: {resultado['headers']}")
-                if resultado["size"] > 0:
-                    body = base64.b64decode(resultado["b64"])
-                    ctype = resultado["headers"].get("content-type", "")
-                    ext = ".pdf" if "pdf" in ctype else (".html" if "html" in ctype else ".bin")
-                    slug = re.sub(r"[^A-Za-z0-9._-]+", "_", d["tipo"])[:40]
-                    fp = out_dir / f"{d['id']}_{slug}{ext}"
-                    fp.write_bytes(body)
-                    print(f"    salvo {fp.name}")
+                # navega numa nova aba — browser envia Referer/Accept naturais
+                tab = await popup.context.new_page()
+                resp = await tab.goto(url, wait_until="domcontentloaded", timeout=60_000)
+                status = resp.status if resp else 0
+                ctype = (resp.headers.get("content-type", "") if resp else "")
+                body = await resp.body() if resp else b""
+                print(f"  [{d['id']}] status={status} type={ctype!r} size={len(body)} url={tab.url}")
+                if not body and "html" in ctype.lower():
+                    # PDF embutido em <embed> ou texto direto; pega o content rendered
+                    body = (await tab.content()).encode("utf-8")
+                ext = ".pdf" if "pdf" in ctype else (".html" if "html" in ctype else ".bin")
+                slug = re.sub(r"[^A-Za-z0-9._-]+", "_", d["tipo"])[:40]
+                fp = out_dir / f"{d['id']}_{slug}{ext}"
+                fp.write_bytes(body)
+                print(f"    salvo {fp.name} ({len(body)} bytes)")
+                await tab.close()
             except Exception as e:
                 print(f"  erro baixando {d['id']}: {e}")
 
