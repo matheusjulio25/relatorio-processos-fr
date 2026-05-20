@@ -158,8 +158,8 @@ async def cmd_pecas(args):
 
         docs = _parse_docs(html)
         relevantes = [d for d in docs if _e_relevante(d["tipo"])]
-        # menor pos = mais cedo no HTML do PJe = mais recente
-        relevantes.sort(key=lambda d: d["pos"])
+        # prefere principais (sem desc ou comecando com "P ") sobre anexos ("A ...")
+        relevantes.sort(key=lambda d: (d["desc"].startswith("A "), d["pos"]))
         top = relevantes[:args.n]
 
         print(f"docs total: {len(docs)}, relevantes: {len(relevantes)}, baixando top {len(top)}:")
@@ -167,32 +167,47 @@ async def cmd_pecas(args):
             print(f"  - {d['id']} | {d['tipo']} | {d['desc'][:60]}")
 
         for d in top:
+            slug = re.sub(r"[^A-Za-z0-9._-]+", "_", d["tipo"])[:40]
+            src = f"{PJE_BASE_URL}/pje/seam/resource/rest/pje-legacy/documento/download/{d['id']}"
+            # 1) navega o iframe frameHtml (funciona pra HTML; PDF cai em <embed>)
             try:
-                src = f"{PJE_BASE_URL}/pje/seam/resource/rest/pje-legacy/documento/download/{d['id']}"
                 frame = popup.frame(name="frameHtml")
                 if frame is None:
-                    # fallback: pega 1o iframe da popup
                     for fr in popup.frames:
                         if "documento/download" in (fr.url or ""):
                             frame = fr; break
-                if frame is None:
-                    print(f"  [{d['id']}] frame nao localizado"); continue
-
-                await frame.goto(src, wait_until="domcontentloaded", timeout=60_000)
-                await popup.wait_for_timeout(3_000)
-                conteudo_html = await frame.content()
-                try:
-                    conteudo_txt = await frame.inner_text("body")
-                except Exception:
-                    conteudo_txt = ""
-
-                slug = re.sub(r"[^A-Za-z0-9._-]+", "_", d["tipo"])[:40]
-                (out_dir / f"{d['id']}_{slug}.html").write_text(conteudo_html, encoding="utf-8")
-                if conteudo_txt.strip():
-                    (out_dir / f"{d['id']}_{slug}.txt").write_text(conteudo_txt, encoding="utf-8")
-                print(f"  [{d['id']}] frame.url={frame.url} html={len(conteudo_html)}B txt={len(conteudo_txt)}B")
+                if frame is not None:
+                    try:
+                        await frame.goto(src, wait_until="domcontentloaded", timeout=30_000)
+                    except Exception:
+                        pass
+                    await popup.wait_for_timeout(2_000)
+                    html_d = await frame.content()
+                    try:
+                        txt_d = await frame.inner_text("body")
+                    except Exception:
+                        txt_d = ""
+                    if len(html_d) > 1000 and txt_d.strip():
+                        (out_dir / f"{d['id']}_{slug}.html").write_text(html_d, encoding="utf-8")
+                        (out_dir / f"{d['id']}_{slug}.txt").write_text(txt_d, encoding="utf-8")
+                        print(f"  [{d['id']}] HTML salvo {len(html_d)}B / texto {len(txt_d)}B")
+                        continue
             except Exception as e:
-                print(f"  erro {d['id']}: {e}")
+                print(f"  [{d['id']}] iframe falhou: {e}")
+
+            # 2) PDF: baixa binario via context.request com Referer da popup
+            try:
+                resp = await popup.context.request.get(
+                    src, headers={"Referer": popup.url, "Accept": "*/*"}, timeout=60_000,
+                )
+                body = await resp.body()
+                ctype = resp.headers.get("content-type", "")
+                ext = ".pdf" if "pdf" in ctype else ".bin"
+                fp = out_dir / f"{d['id']}_{slug}{ext}"
+                fp.write_bytes(body)
+                print(f"  [{d['id']}] binario {len(body)}B ({ctype}) -> {fp.name}")
+            except Exception as e:
+                print(f"  [{d['id']}] binario falhou: {e}")
 
 
 async def cmd_diff(args):
