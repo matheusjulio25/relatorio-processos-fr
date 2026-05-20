@@ -223,6 +223,23 @@ async def cmd_pecas(args):
         for d in top:
             slug = re.sub(r"[^A-Za-z0-9._-]+", "_", d["tipo"])[:40]
             src = f"{PJE_BASE_URL}/pje/seam/resource/rest/pje-legacy/documento/download/{d['id']}"
+            # 1) clica no doc dentro do timeline pra setar state no servidor
+            clicado = await popup.evaluate(
+                """(docId) => {
+                    // procura algum elemento clicavel que contenha o docId em onclick ou href
+                    const all = document.querySelectorAll('[onclick]');
+                    for (const el of all) {
+                        const oc = el.getAttribute('onclick') || '';
+                        if (oc.includes(docId) && (oc.includes('A4J.AJAX.Submit') || oc.includes('idProcessoDocumento'))) {
+                            try { el.click(); return 'clicked: '+(el.tagName)+'#'+(el.id||''); } catch(e) {}
+                        }
+                    }
+                    return 'no-handler-for-'+docId;
+                }""",
+                d["id"],
+            )
+            print(f"  [{d['id']}] timeline click -> {clicado}")
+            await popup.wait_for_timeout(4_000)
             try:
                 res = await popup.evaluate(
                     """(src) => {
