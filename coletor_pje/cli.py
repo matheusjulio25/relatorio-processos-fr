@@ -167,26 +167,34 @@ async def cmd_pecas(args):
             print(f"  - {d['id']} | {d['tipo']} | {d['desc'][:60]}")
 
         for d in top:
-            url = f"{PJE_BASE_URL}/pje/seam/resource/rest/pje-legacy/documento/download/{d['id']}"
             try:
-                # navega numa nova aba — browser envia Referer/Accept naturais
-                tab = await popup.context.new_page()
-                resp = await tab.goto(url, wait_until="domcontentloaded", timeout=60_000)
-                status = resp.status if resp else 0
-                ctype = (resp.headers.get("content-type", "") if resp else "")
-                body = await resp.body() if resp else b""
-                print(f"  [{d['id']}] status={status} type={ctype!r} size={len(body)} url={tab.url}")
-                if not body and "html" in ctype.lower():
-                    # PDF embutido em <embed> ou texto direto; pega o content rendered
-                    body = (await tab.content()).encode("utf-8")
-                ext = ".pdf" if "pdf" in ctype else (".html" if "html" in ctype else ".bin")
+                src = f"/pje/seam/resource/rest/pje-legacy/documento/download/{d['id']}"
+                # troca o src do iframe frameHtml e espera carregar
+                await popup.evaluate(
+                    """(src) => {
+                        const f = document.getElementById('frameHtml');
+                        if (!f) throw new Error('frameHtml nao encontrado');
+                        f.setAttribute('src', src);
+                    }""",
+                    src,
+                )
+                # espera o iframe ter o frame
+                await popup.wait_for_timeout(6_000)
+                frame = popup.frame(name="frameHtml") or next(
+                    (f for f in popup.frames if "documento/download" in (f.url or "")), None
+                )
+                if frame is None:
+                    print(f"  [{d['id']}] frame nao localizado")
+                    continue
+                conteudo_html = await frame.content()
+                conteudo_txt = await frame.inner_text("body") if conteudo_html else ""
                 slug = re.sub(r"[^A-Za-z0-9._-]+", "_", d["tipo"])[:40]
-                fp = out_dir / f"{d['id']}_{slug}{ext}"
-                fp.write_bytes(body)
-                print(f"    salvo {fp.name} ({len(body)} bytes)")
-                await tab.close()
+                (out_dir / f"{d['id']}_{slug}.html").write_text(conteudo_html, encoding="utf-8")
+                if conteudo_txt.strip():
+                    (out_dir / f"{d['id']}_{slug}.txt").write_text(conteudo_txt, encoding="utf-8")
+                print(f"  [{d['id']}] frame.url={frame.url} html={len(conteudo_html)}B txt={len(conteudo_txt)}B")
             except Exception as e:
-                print(f"  erro baixando {d['id']}: {e}")
+                print(f"  erro {d['id']}: {e}")
 
 
 async def cmd_diff(args):
