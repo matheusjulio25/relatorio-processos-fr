@@ -167,17 +167,35 @@ async def cmd_pecas(args):
             print(f"  - {d['id']} | {d['tipo']} | {d['desc'][:60]}")
 
         for d in top:
-            url = f"{PJE_BASE_URL}/pje/seam/resource/rest/pje-legacy/documento/download/{d['id']}"
+            url = f"/pje/seam/resource/rest/pje-legacy/documento/download/{d['id']}"
             try:
-                resp = await popup.request.get(url, timeout=60_000)
-                status = resp.status
-                ctype = resp.headers.get("content-type", "")
-                body = await resp.body()
+                resultado = await popup.evaluate(
+                    """async (path) => {
+                        const r = await fetch(path, {credentials: 'same-origin'});
+                        const buf = await r.arrayBuffer();
+                        const bytes = new Uint8Array(buf);
+                        // base64-encode em chunks pra evitar stack overflow
+                        let bin = '';
+                        for (let i = 0; i < bytes.length; i += 0x8000) {
+                            bin += String.fromCharCode.apply(null, bytes.subarray(i, i+0x8000));
+                        }
+                        return {
+                            status: r.status,
+                            ctype: r.headers.get('content-type') || '',
+                            b64: btoa(bin),
+                            size: bytes.length,
+                        };
+                    }""",
+                    url,
+                )
+                import base64
+                body = base64.b64decode(resultado["b64"])
+                ctype = resultado["ctype"]
                 ext = ".pdf" if "pdf" in ctype else (".html" if "html" in ctype else ".bin")
                 slug = re.sub(r"[^A-Za-z0-9._-]+", "_", d["tipo"])[:40]
                 fp = out_dir / f"{d['id']}_{slug}{ext}"
                 fp.write_bytes(body)
-                print(f"  baixado {fp.name} ({len(body)} bytes, {status}, {ctype})")
+                print(f"  baixado {fp.name} ({len(body)} bytes, status {resultado['status']}, {ctype})")
             except Exception as e:
                 print(f"  erro baixando {d['id']}: {e}")
 
