@@ -86,6 +86,8 @@ async def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--todos", action="store_true", help="inclui os sem perícia (feitas==0)")
+    ap.add_argument("--sufixo", default="", help="sufixo do perfil do navegador (p/ paralelo)")
+    ap.add_argument("--shard", default="", help="I/M: processa só os CNJs com índice%%M==I (paralelo)")
     args = ap.parse_args()
 
     por = json.loads(POR.read_text(encoding="utf-8"))
@@ -94,17 +96,24 @@ async def main():
     cnjs += [c for c, v in por.items() if v.get("feitas", 0) == 1]
     if args.todos:
         cnjs += [c for c, v in por.items() if v.get("feitas", 0) == 0]
+    if args.shard:
+        I, M = (int(x) for x in args.shard.split("/"))
+        cnjs = [c for k, c in enumerate(cnjs) if k % M == I]
     if args.limit:
         cnjs = cnjs[: args.limit]
 
-    idx = json.loads(IDX.read_text(encoding="utf-8")) if IDX.exists() else {}
+    idx_fp = Path(f"mapas/coleta_cnj{args.sufixo}.json")
+    idx = json.loads(idx_fp.read_text(encoding="utf-8")) if idx_fp.exists() else {}
     DOCS.mkdir(parents=True, exist_ok=True)
     total = len(cnjs)
-    print(f"[coleta] {total} CNJs prioritários; {len(idx)} no checkpoint", flush=True)
+    print(f"[coleta{args.sufixo}] shard={args.shard or 'todo'} {total} CNJs; {len(idx)} no checkpoint", flush=True)
 
-    async with pje1g_consulta_context(headless=False) as ctx:
+    async with pje1g_consulta_context(headless=False, sufixo=args.sufixo) as ctx:
         page = ctx.pages[0] if ctx.pages else await ctx.new_page()
         for i, cnj in enumerate(cnjs, 1):
+            # pula por PASTA já coletada (race-safe entre shards paralelos)
+            if (DOCS / cnj.replace(".", "_") / "detalhe.txt").exists():
+                continue
             if cnj in idx:
                 continue
             try:
@@ -118,7 +127,7 @@ async def main():
             if not popup:
                 print(f"[coleta] {i}/{total} {cnj} -> NAO ABRIU", flush=True)
                 idx[cnj] = {"aberto": False}
-                IDX.write_text(json.dumps(idx, ensure_ascii=False, indent=1), encoding="utf-8")
+                idx_fp.write_text(json.dumps(idx, ensure_ascii=False, indent=1), encoding="utf-8")
                 continue
             try:
                 html = await popup.content()
@@ -175,7 +184,7 @@ async def main():
                     await popup.close()
                 except Exception:
                     pass
-            IDX.write_text(json.dumps(idx, ensure_ascii=False, indent=1), encoding="utf-8")
+            idx_fp.write_text(json.dumps(idx, ensure_ascii=False, indent=1), encoding="utf-8")
     print(f"[coleta] FIM. {len(idx)} processados", flush=True)
 
 
