@@ -18,11 +18,13 @@ import pyotp
 from dotenv import load_dotenv
 from playwright.async_api import BrowserContext, async_playwright
 
+from .segredos import ler_segredo
+
 load_dotenv()
 
 PJE_BASE_URL = os.getenv("PJE_BASE_URL", "https://pje1g.trf5.jus.br")
 PJE_LOGIN_URL = os.getenv("PJE_LOGIN_URL", f"{PJE_BASE_URL}/pje/login.seam")
-PJE_TOTP_SECRET = os.getenv("PJE_TOTP_SECRET", "").replace(" ", "")
+PJE_TOTP_SECRET = ler_segredo("PJE_TOTP_SECRET", "pje-totp-secret").replace(" ", "")
 
 PROFILE_DIR = Path(
     os.getenv("BROWSER_PROFILE", str(Path(__file__).resolve().parent.parent / "browser-profile"))
@@ -87,10 +89,15 @@ async def pje_context(headless: bool = False):
 
         await _handle_totp(page)
 
+        # Aguarda o painel principal (não apenas qualquer URL do domínio).
+        # Se 2FA manual, dá 3 minutos para o usuário digitar o código.
         try:
-            await page.wait_for_url(f"{PJE_BASE_URL}/**", timeout=120_000)
+            await page.wait_for_selector("#tabAcervo_lbl, #formAbaAcervo", timeout=180_000)
         except Exception:
-            pass
+            try:
+                await page.wait_for_url(f"{PJE_BASE_URL}/pje/Painel/**", timeout=30_000)
+            except Exception:
+                pass
         try:
             yield ctx
         finally:

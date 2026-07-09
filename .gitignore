@@ -1,18 +1,38 @@
+# --- Segredos / credenciais ---
 .env
 *.pfx
 *.p12
 *.pem
+
+# --- Perfis do navegador (cookies/login/acesso ao certificado) — NUNCA versionar ---
+browser-profile*/
+playwright-state.json
+
+# --- Dados de clientes / PII (LGPD) — NUNCA versionar ---
+mapas/
+manifests/*.json
+docs_cnj/
+relatorio_data.json
+login_pje.html
+
+# --- Planilhas, PDFs e documentos (dados de clientes) ---
+*.xlsx
+*.pdf
+*.docx
+
+# --- Saídas / temporários ---
+debug/
+pecas/
+relatorios/
+logs/
+downloads/
+chroma_db/
+*.output
+
+# --- Python / sistema ---
 __pycache__/
 *.pyc
 .venv/
 venv/
 .pytest_cache/
 .DS_Store
-playwright-state.json
-downloads/
-chroma_db/
-browser-profile/
-debug/
-pecas/
-relatorios/
-logs/
