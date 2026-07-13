@@ -66,7 +66,7 @@ MÉTODO (cadeia fechada, premissa→premissa→conclusão):
 1) BENEFÍCIO e rito probatório: BPC/LOAS deficiência exige, EM REGRA, DUAS perícias (MÉDICA + SOCIAL). BPC idoso/auxílio-incapacidade/aposentadoria por incapacidade em regra UMA médica. Se indefinido, trate médica+social.
 2) ESTADO pela TIMELINE INTEIRA (não só a última linha): procure "arquivado", "baixa definitiva", "extinto", "trânsito em julgado", "sentença", "remetidos à turma recursal", "cumprimento de sentença", "conclusos", perícias designadas/realizadas, laudos juntados, impugnações.
    - Se JÁ arquivado/extinto/baixado ou já sentenciado ou em recurso/cumprimento => despachar_agora=false (não há o que despachar p/ julgamento).
-3) Mapeie o estado de CADA perícia exigida.
+3) Mapeie o estado de CADA perícia exigida. ATENÇÃO aos SINÔNIMOS da perícia SOCIAL — ela aparece como "perícia social", "avaliação social", "estudo social", "laudo social", "avaliação socioeconômica", "perícia socioeconômica" ou laudo/parecer de ASSISTENTE SOCIAL (CRESS). Qualquer uma dessas, se realizada/juntada na timeline, conta como perícia SOCIAL REALIZADA — NÃO marque pericia_social="nao_ha" se houver avaliação/estudo/laudo social nos autos. (A perícia MÉDICA pode vir como "perícia médica", "laudo pericial médico", laudo de médico CRM/psiquiatra/neuro etc.)
 4) MOTIVO DO INDEFERIMENTO (crítico p/ BPC deficiência): leia a petição inicial e/ou a contestação e/ou a carta/comunicado de indeferimento do INSS para descobrir POR QUE o INSS negou administrativamente:
    - Se negou por NÃO reconhecer a DEFICIÊNCIA (e NÃO impugnou a renda/miserabilidade) => a miserabilidade é INCONTROVERSA e, pelo **Tema 187/TNU**, DISPENSA-SE a perícia SOCIAL. Nesse caso, com a perícia MÉDICA judicial favorável e processo ativo/sem sentença, pronto_para_sentenca=true e despachar_agora=true (dispensa_social_tema187=true).
    - Se negou por RENDA/miserabilidade (ou por ambos) => a social é necessária; não há dispensa.
@@ -107,6 +107,8 @@ const results = await pipeline(
   (p) => agent(promptAnalisar(p), { label: `an:${p.cnj}`, phase: 'Analisar', schema: SCHEMA }),
   (a, p) => {
     if (!a) return null
+    // Verificação adversarial SÓ onde o erro é caro: quando diz "despachar agora".
+    if (a.despachar_agora !== true) return { ...a, verificacao: null }
     return agent(promptVerificar(p, a), { label: `vf:${p.cnj}`, phase: 'Verificar', schema: VSCHEMA })
       .then((v) => ({ ...a, verificacao: v || null }))
       .catch(() => ({ ...a, verificacao: null }))

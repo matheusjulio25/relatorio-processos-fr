@@ -133,7 +133,10 @@ async def main():
                 html = await popup.content()
                 docs = _parse_docs(html)
                 sents = [d for d in docs if "senten" in d["tipo"].lower()]
-                laudos = [d for d in docs if "laudo" in d["tipo"].lower()]
+                _SOC = ("laudo", "social", "socioecon", "estudo social",
+                        "avaliacao social", "avaliação social", "assistente social")
+                laudos = [d for d in docs
+                          if any(k in (d["tipo"] + " " + d.get("desc", "")).lower() for k in _SOC)]
                 # contexto p/ motivo do indeferimento (Tema 187). O indeferimento/PA costuma vir
                 # na inicial ou na emenda à inicial (juntado pela parte), ou no processo
                 # administrativo (juntado pela parte ou pelo INSS).

@@ -36,3 +36,7 @@ __pycache__/
 venv/
 .pytest_cache/
 .DS_Store
+
+# scripts de workflow gerados (embutem CNJs + caminhos locais)
+bin/wf_run_*.js
+mapas/wf_args*.json
