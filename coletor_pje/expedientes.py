@@ -16,6 +16,13 @@ Estrutura da tela (calibrada em 29/07/2026, pje1g TRF5):
     formExpedientes:tbExpedientes:<id_expediente>:...     linhas da lista
 
 Atenção: é a jurisdição (jNp) que carrega a lista, não o cxExItem.
+
+EM ABERTO — paginação: a coleta para na 1ª página de cada jurisdição (49 dos 143
+pendentes). O clique em "próxima" é aceito (td.onclick() retorna ok), mas o
+conjunto de ids não muda em 30s de polling. Hipóteses já descartadas: estado
+acumulado no browser-profile (perfil limpo dá o mesmo 49) e escape do Python nos
+trechos JS (IDS_JS e LINHAS_JS são idênticos e o regex casa). Os contadores por
+situação (--resumo) não dependem disso e são exatos.
 """
 from __future__ import annotations
 
@@ -45,16 +52,17 @@ ULT_MOV_RE = re.compile(
 )
 BOTOES = {"responder", "tomar ciência", "tomar ciencia", "selecionar"}
 
-# Assinatura da lista: ids de expediente presentes. Serve para esperar a troca
-# real de conteúdo em vez de timeout fixo (mesmo motivo do acervo).
-FP_JS = """() => {
-    const ids = [];
+# Ids de expediente presentes na tela. A espera compara conjuntos em laço curto
+# de evaluate, e não com um wait_for_function longo: o A4J.AJAX.Submit do PJe
+# re-renderiza e destrói o contexto de execução, o que derruba a espera longa
+# mesmo quando a lista carregou — era isso que travava a paginação em 49/143.
+IDS_JS = """() => {
+    const ids = new Set();
     for (const el of document.querySelectorAll('[id^="formExpedientes:tbExpedientes:"]')) {
         const m = el.id.match(/^formExpedientes:tbExpedientes:(\\d+):/);
-        if (m) ids.push(m[1]);
+        if (m) ids.add(m[1]);
     }
-    const u = Array.from(new Set(ids));
-    return u.length + ':' + u.slice(0, 8).join(',');
+    return Array.from(ids);
 }"""
 
 RESUMO_JS = """() => {
@@ -132,17 +140,22 @@ LINHAS_JS = """() => {
     return out;
 }"""
 
+# Escopado ao datascroller do grid de expedientes: varrer o documento inteiro
+# procurando 'page': 'next' pega o paginador de outra aba (o Acervo continua no
+# DOM). "dsbld" é como o RichFaces marca o botão desabilitado na última página.
 PROXIMA_JS = """() => {
-    for (const el of document.querySelectorAll('[onclick]')) {
-        const oc = el.getAttribute('onclick') || '';
-        if (oc.includes("'page': 'next'") || oc.includes('"page":"next"')) {
-            const cls = el.className || '';
-            if (cls.includes('inact') || cls.includes('disabled')) continue;
-            el.click();
-            return true;
-        }
+    const sc = document.querySelector('[id$="tbExpedientes:scPendentes_table"]')
+            || document.querySelector('[id*="tbExpedientes:scPendentes"]');
+    if (!sc) return 'sem-scroller';
+    for (const td of sc.querySelectorAll('td[onclick]')) {
+        const oc = td.getAttribute('onclick') || '';
+        if (!oc.includes("'page': 'next'") && !oc.includes('"page":"next"')) continue;
+        const cls = td.className || '';
+        if (cls.includes('dsbld') || cls.includes('disabled')) return 'ultima-pagina';
+        try { td.onclick(); } catch (e) { return 'err:' + e.message; }
+        return 'ok';
     }
-    return false;
+    return 'sem-botao';
 }"""
 
 
@@ -270,24 +283,41 @@ def _parse_linha(id_exp: str, texto: str, tags: list[str] | None = None) -> Expe
     return exp
 
 
-async def _esperar_troca(page, antes: str, timeout: int = 30_000) -> bool:
-    """True quando a listagem realmente mudou.
+async def _esperar_ids(page, antes: set[str], timeout: int = 30_000) -> set[str]:
+    """Espera a lista trocar de conteúdo; devolve os ids novos (vazio = não trocou).
 
-    O A4J.AJAX.Submit do PJe re-renderiza e destrói o contexto de execução, o que
-    derruba o wait_for_function mesmo quando a lista carregou. Por isso, ao falhar,
-    confere o estado na mão antes de declarar que a jurisdição foi pulada — senão
-    o aviso de "total incompleto" dispara em toda execução e perde o valor.
+    Faz polling curto com evaluate em vez de um wait_for_function longo, porque a
+    re-renderização do A4J destrói o contexto e mataria a espera longa. Cada
+    evaluate que falha é apenas mais uma tentativa perdida, não o fim da espera.
     """
-    try:
-        await page.wait_for_function(f"(fp) => ({FP_JS})() !== fp", arg=antes, timeout=timeout)
-        await page.wait_for_timeout(2_000)
-        return True
-    except Exception:
-        await page.wait_for_timeout(3_000)
+    passo = 1_500
+    restante = timeout
+    erros = 0
+    primeiro_erro = ""
+    visto = ""
+    while restante > 0:
+        await page.wait_for_timeout(passo)
+        restante -= passo
         try:
-            return await page.evaluate(FP_JS) != antes
-        except Exception:
-            return False
+            ids = set(await page.evaluate(IDS_JS))
+        except Exception as e:
+            erros += 1
+            primeiro_erro = primeiro_erro or str(e)[:110]
+            continue
+        visto = f"{len(ids)} ids"
+        if ids and ids != antes:
+            await page.wait_for_timeout(1_000)  # deixa o render terminar
+            try:
+                ids = set(await page.evaluate(IDS_JS)) or ids
+            except Exception:
+                pass
+            return ids
+    # Sem isso não se distingue "a lista veio vazia" de "o evaluate falhou N vezes",
+    # e são causas opostas.
+    print(f"[expedientes]    espera esgotou: última leitura={visto or 'nenhuma'}, "
+          f"evaluate falhou {erros}x{(' — ' + primeiro_erro) if primeiro_erro else ''}, "
+          f"antes={len(antes)} ids")
+    return set()
 
 
 async def abrir_aba(page) -> list[dict]:
@@ -342,25 +372,30 @@ async def listar_expedientes(
 
         achados: dict[str, Expediente] = {}
         incompletas: list[str] = []
+        na_tela: set[str] = set()
 
         for j in jurs:
             print(f"[expedientes] -> {j['jurisdicao']} (esperado {j['total']})")
-            antes = await page.evaluate(FP_JS)
             try:
                 await page.evaluate("(id) => document.getElementById(id).onclick()", j["id"])
             except Exception as e:
                 print(f"[expedientes]    erro clicando: {e}")
                 incompletas.append(j["jurisdicao"])
                 continue
-            if not await _esperar_troca(page, antes):
-                print("[expedientes]    AVISO: lista não mudou — jurisdição possivelmente PULADA")
+            # Se a troca não for confirmada, ainda tenta ler o que está na tela:
+            # a confirmação falha em alguns carregamentos mesmo com a lista certa
+            # presente, e desistir aqui zera a coleta inteira.
+            nova = await _esperar_ids(page, na_tela)
+            if nova:
+                na_tela = nova
+            else:
+                print("[expedientes]    AVISO: troca não confirmada — lendo a tela mesmo assim")
                 incompletas.append(j["jurisdicao"])
 
             pagina = 1
             while True:
-                linhas = await page.evaluate(LINHAS_JS)
                 novos = 0
-                for l in linhas:
+                for l in await page.evaluate(LINHAS_JS):
                     if l["id"] in achados:
                         continue
                     exp = _parse_linha(l["id"], l["texto"], l.get("tags"))
@@ -379,16 +414,18 @@ async def listar_expedientes(
                         await page.content(), encoding="utf-8"
                     )
 
-                if novos == 0 and pagina > 1:
-                    break
-                fp_pag = await page.evaluate(FP_JS)
-                if not await page.evaluate(PROXIMA_JS):
+                r = await page.evaluate(PROXIMA_JS)
+                if r != "ok":
+                    if r != "ultima-pagina":
+                        print(f"[expedientes]    paginação encerrada: {r}")
                     break
                 pagina += 1
-                if not await _esperar_troca(page, fp_pag):
+                novas = await _esperar_ids(page, na_tela)
+                if not novas:
                     print(f"[expedientes]    AVISO: página {pagina} não carregou — parando")
                     incompletas.append(f"{j['jurisdicao']}#p{pagina}")
                     break
+                na_tela = novas
 
         if incompletas:
             print(f"[expedientes] ATENÇÃO: {len(incompletas)} jurisdição(ões)/página(s) sem "
