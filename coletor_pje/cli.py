@@ -1275,6 +1275,59 @@ async def cmd_pericias(args):
         print(f"salvo em {alvo}")
 
 
+async def cmd_expedientes(args):
+    """Expedientes com prazo em aberto: data limite, ciência e tags de prioridade."""
+    import json
+    from dataclasses import asdict
+
+    from .expedientes import abrir_aba, listar_expedientes
+
+    if args.resumo:
+        async with pje_context(headless=args.headless) as ctx:
+            page = await ctx.new_page()
+            try:
+                resumo = await abrir_aba(page)
+            finally:
+                await page.close()
+        for r in resumo:
+            print(f"[{r['indice']}] {r['rotulo']}\t{r['total']}")
+        return
+
+    async with pje_context(headless=args.headless) as ctx:
+        exps, _ = await listar_expedientes(ctx, grupo=args.grupo, debug=args.debug)
+
+    exps.sort(key=lambda e: _ordem_data(e.data_limite))
+    for e in exps:
+        marca = "PcD" if e.com_deficiencia else "-"
+        print(f"{e.data_limite or '-'}\t{e.numero}\t{e.classe or '-'}\t{e.tipo or '-'}\t"
+              f"{(str(e.prazo_dias) + 'd') if e.prazo_dias else '-'}\t{marca}\t"
+              f"{e.vara or '-'}\t{e.destinatario or ''}")
+
+    pcd = sum(1 for e in exps if e.com_deficiencia)
+    sem_ciencia = sum(1 for e in exps if not e.ciencia_em)
+    print(f"\nTotal: {len(exps)} | com deficiência: {pcd} | sem ciência: {sem_ciencia}")
+
+    if args.json:
+        alvo = Path(args.json)
+        alvo.parent.mkdir(parents=True, exist_ok=True)
+        alvo.write_text(
+            json.dumps([asdict(e) for e in exps], ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        print(f"salvo em {alvo}")
+
+
+def _ordem_data(d: str | None) -> tuple:
+    """Ordena por data limite (DD/MM/AAAA HH:MM); sem data vai para o fim."""
+    if not d:
+        return (1, "")
+    m = re.match(r"(\d{2})/(\d{2})/(\d{4})(?:\s+(\d{2}):(\d{2}))?", d)
+    if not m:
+        return (1, d)
+    a, mes, dia = m.group(3), m.group(2), m.group(1)
+    return (0, f"{a}{mes}{dia}{m.group(4) or '00'}{m.group(5) or '00'}")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--headless", action=argparse.BooleanOptionalAction, default=True)
@@ -1333,11 +1386,21 @@ def main():
     p_per.add_argument("--json", default="", metavar="ARQ",
                        help="salva o resultado em ARQ (ex.: mapas/pauta_pericias.json)")
 
+    p_exp = sub.add_parser("expedientes",
+                           help="expedientes com prazo em aberto (data limite, ciência, tags)")
+    p_exp.add_argument("--grupo", type=int, default=0, metavar="N",
+                       help="agrupamento por situação (0 = pendentes de ciência ou resposta)")
+    p_exp.add_argument("--resumo", action="store_true",
+                       help="só os contadores por situação, sem coletar a lista")
+    p_exp.add_argument("--json", default="", metavar="ARQ",
+                       help="salva o resultado em ARQ (ex.: mapas/expedientes.json)")
+
     args = parser.parse_args()
     coro = {"listar": cmd_listar, "diff": cmd_diff, "detalhe": cmd_detalhe,
             "pecas": cmd_pecas, "inspect": cmd_inspect, "relatorio": cmd_relatorio,
             "mapear": cmd_mapear, "turmas": cmd_turmas, "varas": cmd_varas,
-            "merge-turmas": cmd_merge_turmas, "pericias": cmd_pericias}[args.cmd](args)
+            "merge-turmas": cmd_merge_turmas, "pericias": cmd_pericias,
+            "expedientes": cmd_expedientes}[args.cmd](args)
     asyncio.run(coro)
 
 
