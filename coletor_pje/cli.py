@@ -1245,6 +1245,36 @@ async def cmd_merge_turmas(args):
     print(f"Juízes: {len(juizes_merged)} relatores → {out_jf}")
 
 
+async def cmd_pericias(args):
+    """Pauta de perícia: especialidade, data, periciado e situação sem abrir processo."""
+    import json
+    from dataclasses import asdict
+
+    from .pautas import listar_pericias
+
+    async with pje_context(headless=args.headless) as ctx:
+        pericias = await listar_pericias(ctx, debug=args.debug)
+
+    for p in pericias:
+        laudo = "laudo" if p.laudo_anexado else "-"
+        print(f"{p.numero}\t{p.data or '-'} {p.hora or ''}\t{p.especialidade or '-'}\t"
+              f"{p.situacao or '-'}\t{p.orgao_julgador or '-'}\t{p.periciado or ''}\t{laudo}")
+
+    social = sum(1 for p in pericias if p.social)
+    designadas = sum(1 for p in pericias if (p.situacao or "").lower().startswith("designad"))
+    print(f"\nTotal: {len(pericias)} | sociais: {social} | médicas: {len(pericias)-social} "
+          f"| designadas: {designadas}")
+
+    if args.json:
+        alvo = Path(args.json)
+        alvo.parent.mkdir(parents=True, exist_ok=True)
+        alvo.write_text(
+            json.dumps([asdict(p) for p in pericias], ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        print(f"salvo em {alvo}")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--headless", action=argparse.BooleanOptionalAction, default=True)
@@ -1299,11 +1329,15 @@ def main():
 
     sub.add_parser("merge-turmas", help="unifica acordaos_tr_t1/t2/t3.json em acordaos_tr.json")
 
+    p_per = sub.add_parser("pericias", help="pauta de perícia (especialidade/data/periciado) sem abrir processo")
+    p_per.add_argument("--json", default="", metavar="ARQ",
+                       help="salva o resultado em ARQ (ex.: mapas/pauta_pericias.json)")
+
     args = parser.parse_args()
     coro = {"listar": cmd_listar, "diff": cmd_diff, "detalhe": cmd_detalhe,
             "pecas": cmd_pecas, "inspect": cmd_inspect, "relatorio": cmd_relatorio,
             "mapear": cmd_mapear, "turmas": cmd_turmas, "varas": cmd_varas,
-            "merge-turmas": cmd_merge_turmas}[args.cmd](args)
+            "merge-turmas": cmd_merge_turmas, "pericias": cmd_pericias}[args.cmd](args)
     asyncio.run(coro)
 
 
