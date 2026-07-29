@@ -47,6 +47,17 @@ def parse_fields(b):
 
 
 def extrair_contas(text):
+    text = text.strip()
+    # QR direto do PJe: otpauth://totp/LABEL?secret=BASE32&issuer=...
+    if text.lower().startswith("otpauth://totp/"):
+        u = urllib.parse.urlparse(text)
+        q = urllib.parse.parse_qs(u.query)
+        secret = (q.get("secret") or [""])[0].replace(" ", "").upper()
+        if not secret:
+            return []
+        label = urllib.parse.unquote(u.path.lstrip("/"))
+        return [((q.get("issuer") or [""])[0], label, secret)]
+
     m = re.search(r"data=([^&\s]+)", text)
     data_b64 = urllib.parse.unquote(m.group(1)) if m else text.strip()
     raw = base64.b64decode(data_b64)
@@ -71,10 +82,10 @@ def gravar_env(b32):
     env = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
     linhas = []
     if os.path.exists(env):
-        linhas = open(env).read().splitlines()
+        linhas = open(env, encoding="utf-8").read().splitlines()
     linhas = [l for l in linhas if not l.startswith("PJE_TOTP_SECRET=")]
     linhas.append(f"PJE_TOTP_SECRET={b32}")
-    with open(env, "w") as f:
+    with open(env, "w", encoding="utf-8") as f:
         f.write("\n".join(linhas) + "\n")
     # Validação: gera um código sem mostrar o segredo
     try:
@@ -101,7 +112,7 @@ def ler_qr_imagem(path):
     if not textos:
         raise SystemExit("nenhum QR detectado na imagem.")
     for t in textos:
-        if "otpauth-migration" in t or "data=" in t:
+        if "otpauth" in t or "data=" in t:
             return t
     return textos[0]
 
@@ -113,7 +124,7 @@ def main():
     if os.path.exists(src) and src.lower().endswith((".png", ".jpg", ".jpeg", ".heic", ".webp")):
         text = ler_qr_imagem(src)
     elif os.path.exists(src):
-        text = open(src).read()
+        text = open(src, encoding="utf-8").read()
     else:
         text = src
     contas = extrair_contas(text)
