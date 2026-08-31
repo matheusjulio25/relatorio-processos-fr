@@ -1,6 +1,7 @@
 #!/bin/bash
 # Retoma a coleta das Turmas Recursais PE com auto-restart.
-# Roda no máximo 2 turmas em paralelo (8 GB de RAM): t1+t3 juntas, depois t2.
+# Roda as turmas SEMPRE EM SEQUÊNCIA (t1 -> t3 -> t2). NUNCA em paralelo: são dois
+# navegadores e o Mac tem 8 GB — dois browsers simultâneos travam a máquina.
 # Relança automaticamente em caso de crash do browser — o checkpoint por página
 # (mapas/checkpoint_t_t{N}_*.json) garante que cada relançamento retoma onde parou.
 # Para quando o checkpoint da turma some (= turma concluída) OU após 3 execuções
@@ -51,10 +52,10 @@ run_turma() {  # $1 = número da turma (1, 2 ou 3)
   done
 }
 
-# Turmas em SEQUÊNCIA (não em paralelo): com --conc 3 cada turma já usa ~1,1 GB +
+# Turmas em SEQUÊNCIA (não em paralelo): com --conc 5 cada turma já usa ~728 MB +
 # 3 abas; dois browsers simultâneos estouraria os 8 GB. A concorrência interna (CONC)
 # dá a vazão; rodar uma turma por vez mantém a memória segura.
-echo "[wrapper] iniciando coleta sequencial (t1 → t3 → t2), conc=3 — $(date '+%H:%M:%S')"
+echo "[wrapper] iniciando coleta sequencial (t1 → t3 → t2), conc=5 — $(date '+%H:%M:%S')"
 run_turma 1
 run_turma 3
 run_turma 2
